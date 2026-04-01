@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openenv-dsar-env"
+version = "0.1.0"
+description = "DSAR Compliance Environment for OpenEnv — GDPR data subject access request processing and privacy compliance automation"
+requires-python = ">=3.10"
+dependencies = [
+    "openenv-core[core]>=0.2.2",
+    "fastapi>=0.115.0",
+    "pydantic>=2.0.0",
+    "uvicorn>=0.24.0",
+    "requests>=2.31.0",
+    "openai>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.scripts]
+server = "dsar_env.server.app:main"
+
+[tool.setuptools]
+include-package-data = true
+packages = ["dsar_env", "dsar_env.server"]
+package-dir = { "dsar_env" = ".", "dsar_env.server" = "server" }

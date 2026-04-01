@@ -1,0 +1,39 @@
+# Virtual environments — ignore at any depth
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyc
+
+# Package/build artifacts
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Test cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Editor & OS
+.vscode/
+.idea/
+*.DS_Store
+Thumbs.db
+
+# Secrets — never commit
+.env
+*.env
+
+# uv lockfile (optional — remove this line if you want to track it)
+# uv.lock
+
+# Temp debug scripts
+test_rewards.py
+openenv_obs_source.txt
