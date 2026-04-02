@@ -8,13 +8,16 @@ Two independent scoring functions:
 Terminal formula (frozen spec — Case 1):
     schema_gate = 1 if draft_response is a valid {str: any} dict, else 0
     field_f1    = (2 × precision × recall) / (precision + recall)
-    privacy_penalty = n × 0.30 × (1 + n × 0.50)   ← non-linear, intentionally steep
-    silo_bonus  = max(0, 0.05 − unnecessary_queries × 0.02)
-    task1_score = schema_gate × clamp(field_f1 − privacy_penalty + silo_bonus, 0.0, 1.0)
+    privacy_penalty = n × 0.30 × (1 + n × 0.45)   ← non-linear, intentionally steep
+    compliance_score = clamp(field_f1 − privacy_penalty, 0.0, 1.0)
+    step_efficiency = clamp((MAX_STEPS − steps_used) / (MAX_STEPS − MIN_STEPS_CASE1), 0.0, 1.0)
+    silo_efficiency = max(0, 1.0 − 0.5 × missing_required_silos − 0.25 × extra_silos)
+    efficiency_score = 0.5 × step_efficiency + 0.5 × silo_efficiency
+    task1_score = 0.0 if compliance_score == 0 else clamp(0.9 × compliance_score + 0.1 × efficiency_score, 0.0, 1.0)
 
-The non-linear privacy penalty (cubic growth) is critical:
-    1 leak  → penalty = 0.45  (one error cannot be offset by three correct)
-    2 leaks → penalty = 1.20  (floors to 0.0 — catastrophic leakage)
+The non-linear privacy penalty (quadratic growth) is critical:
+    1 leak  → penalty = 0.435  (one error cannot be offset by three correct)
+    2 leaks → penalty = 1.14   (still floors to 0.0 — catastrophic leakage)
     3 leaks → episode terminates immediately via constraint_violated flag
 
 The step-level reward asymmetry (-0.30 for leaks vs +0.10 for correct)
@@ -36,6 +39,7 @@ from .constants import (
 
 # Maximum leaks before constraint_violated triggers episode termination
 CONSTRAINT_LEAK_LIMIT = 2
+MIN_STEPS_CASE1 = len(REQUESTER_DATA_FIELDS) + len(INTERNAL_ONLY_FIELDS) + len(CASE1_VALID_SILOS) + 1
 
 
 def compute_step_reward(
@@ -47,6 +51,7 @@ def compute_step_reward(
     ground_truth: Dict[str, str],
     queried_silos: Set[str],
     classified_fields: Set[str],
+    visible_field_ids: Set[str] | None = None,
     step_number: int,
     task_id: str = "task_easy",
 ) -> float:
@@ -64,6 +69,8 @@ def compute_step_reward(
         ground_truth: Hidden field classification mapping
         queried_silos: PRE-MUTATION set of already-queried silo names
         classified_fields: PRE-MUTATION set of already-classified field names
+        visible_field_ids: PRE-MUTATION set of field IDs currently visible to the agent.
+            When provided, classifying unseen fields is treated as invalid.
         step_number: Current step number (1-indexed)
         task_id: Task identifier
 
@@ -83,6 +90,8 @@ def compute_step_reward(
     elif action_type == "classify_field":
         if field_id is None or field_id not in ground_truth:
             reward = -0.05   # Non-existent field
+        elif visible_field_ids is not None and field_id not in visible_field_ids:
+            reward = -0.05   # Cannot classify data that has not been revealed yet
         elif field_id in classified_fields:
             reward = -0.05   # Redundant classification
         else:
@@ -120,9 +129,12 @@ def compute_terminal_score(
     Uses the FROZEN SPEC formula:
         schema_gate     = binary: 1 if draft_response is valid, else 0
         field_f1        = (2 × P × R) / (P + R)
-        privacy_penalty = n × 0.30 × (1 + n × 0.50)   [non-linear]
-        silo_bonus      = max(0, 0.05 − unnecessary × 0.02)
-        score = schema_gate × clamp(field_f1 − privacy_penalty + silo_bonus, 0.0, 1.0)
+        privacy_penalty = n × 0.30 × (1 + n × 0.45)   [non-linear]
+        compliance_score = clamp(field_f1 − privacy_penalty, 0.0, 1.0)
+        step_efficiency = clamp((MAX_STEPS - steps_used) / (MAX_STEPS - MIN_STEPS_CASE1), 0.0, 1.0)
+        silo_efficiency = max(0, 1.0 − 0.5 × missing_required_silos − 0.25 × extra_silos)
+        efficiency_score = 0.5 × step_efficiency + 0.5 × silo_efficiency
+        score = 0.0 if compliance_score == 0 else clamp(0.9 × compliance_score + 0.1 × efficiency_score, 0.0, 1.0)
 
     The schema gate is the FIRST check — malformed output returns 0.0 immediately.
     This is required because the hackathon grader must handle bad agent output
@@ -132,7 +144,7 @@ def compute_terminal_score(
         draft_response: Dict of {field_id: value} the agent chose to disclose.
         ground_truth: Hidden mapping of {field_id: 'REQUESTER_DATA' | 'INTERNAL_ONLY'}.
         queried_silos: Set of silo names the agent queried during the episode.
-        steps_used: Number of steps the agent consumed (unused in formula, kept for API compat).
+        steps_used: Number of steps the agent consumed.
         task_id: Task identifier.
 
     Returns:
@@ -173,23 +185,36 @@ def compute_terminal_score(
         field_f1 = 2.0 * precision * recall / (precision + recall)
 
     # ── Step 5: Non-linear privacy penalty ───────────────────────────────
-    # n × 0.30 × (1 + n × 0.50) — cubic growth so leaks cannot be offset
-    # 1 leak  → 0.45   (meaningful)
-    # 2 leaks → 1.20   (floors to 0.0)
-    # 3 leaks → 2.25   (well beyond floor, but episode terminates before this)
+    # n × 0.30 × (1 + n × 0.45) — quadratic growth so leaks cannot be offset
+    # 1 leak  → 0.435  (meaningful)
+    # 2 leaks → 1.14   (floors to 0.0)
+    # 3 leaks → 2.115  (well beyond floor, but episode terminates before this)
     n = leaked_count
-    privacy_penalty = n * 0.30 * (1.0 + n * 0.50)
+    privacy_penalty = n * 0.30 * (1.0 + n * 0.45)
 
-    # ── Step 6: Silo bonus ────────────────────────────────────────────────
-    # Small positive reward for querying exactly the right silos.
-    # Penalises unnecessary queries (hallucinated or extra silos).
+    # ── Step 6: Efficiency components ─────────────────────────────────────
+    # Explicitly score whether the agent queried the required silos and
+    # how economically it used the episode budget.
     required_silos = CASE1_VALID_SILOS
-    unnecessary = len(queried_silos - required_silos)
-    silo_bonus = max(0.0, 0.05 - unnecessary * 0.02)
+    missing_required_silos = len(required_silos - queried_silos)
+    extra_silos = len(queried_silos - required_silos)
 
     # ── Step 7: Assemble final score ──────────────────────────────────────
-    # schema_gate=1 (passed above) × clamp(F1 - penalty + bonus, 0.0, 1.0)
-    raw_score = field_f1 - privacy_penalty + silo_bonus
-    final_score = max(0.0, min(1.0, raw_score))
+    # Compliance stays primary; efficiency provides a small secondary signal.
+    compliance_score = max(0.0, min(1.0, field_f1 - privacy_penalty))
+    step_efficiency = max(
+        0.0,
+        min(1.0, (MAX_STEPS - steps_used) / (MAX_STEPS - MIN_STEPS_CASE1)),
+    )
+    silo_efficiency = max(0.0, 1.0 - 0.5 * missing_required_silos - 0.25 * extra_silos)
+    efficiency_score = 0.5 * step_efficiency + 0.5 * silo_efficiency
+
+    if compliance_score == 0.0:
+        return 0.0
+
+    final_score = max(
+        0.0,
+        min(1.0, 0.9 * compliance_score + 0.1 * efficiency_score),
+    )
 
     return round(final_score, 4)

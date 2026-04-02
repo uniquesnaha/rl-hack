@@ -37,7 +37,7 @@ by falling and getting up, not by reading a book about walking.
 
 ```
 Zero-shot LLM agent (what you have now):
-  Input: "classify_field churn_probability"
+  Input: "classify_field customer_health_score"
   LLM reads description → applies language understanding → outputs "withhold"
   Score: ~0.99 (already very capable from training)
 
@@ -92,7 +92,7 @@ Reward +0.10 for "classify_field full_name disclose"
 → Agent learns: when you see a field with "name" in the description,
                 the word "disclose" is the right token to output
 
-Reward -0.30 for "classify_field risk_score disclose"
+Reward -0.30 for "classify_field customer_health_score disclose"
 → Agent learns: when you see a "score" field with probability/numerical value,
                 never say "disclose"
 
@@ -136,9 +136,9 @@ def compute_step_reward(...) -> float:
         reward = -0.30     # LEAK: agent learns never to do this
 
 def compute_terminal_score(...) -> float:
-    privacy_penalty = n * 0.30 * (1 + n * 0.50)  # non-linear
-    # 1 leak:  -0.45  (painful but survivable)
-    # 2 leaks: -1.20  (catastrophic, floors to 0)
+    privacy_penalty = n * 0.30 * (1 + n * 0.45)  # non-linear
+    # 1 leak:  -0.435  (painful but survivable)
+    # 2 leaks: -1.14   (catastrophic, floors to 0)
 ```
 
 The non-linear penalty is **intentional RL design**. It creates a
@@ -171,7 +171,7 @@ if episode.leaked_count > 2 and not episode.done:
 This teaches the agent that privacy violations have HARD consequences —
 the episode simply ends. An RL agent that learns in an environment with
 this gate will develop a **risk-averse policy**: even one leak is
-painful (-0.45), two leaks are catastrophic (score 0.0), three leaks
+painful (-0.435), two leaks are catastrophic (score 0.0), three leaks
 end the game immediately.
 
 ---
@@ -231,14 +231,14 @@ Run the SFT model against your environment for 100k+ episodes
 → Policy gradient updates: increase probability of +reward actions
 → After training: score goes from ~0.70 → ~0.92+
 → Model learns things the SFT data never showed it:
-   - "risk_score withhold" even when description is ambiguous
+   - "customer_health_score withhold" even when description is ambiguous
    - Call compile_response before running out of steps
    - Never re-classify a field (saves steps for step efficiency)
 ```
 
 The key insight: **the RL training finds behaviours that pure
 language understanding cannot**. An LLM might guess that
-`risk_score` should be withheld. An RL-trained agent KNOWS it,
+`customer_health_score` should be withheld. An RL-trained agent KNOWS it,
 because the -0.30 signal 10,000 times burned it into the weights.
 
 ---

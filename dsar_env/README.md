@@ -17,13 +17,13 @@ This environment trains RL agents to automate the most operationally complex par
 
 | Task | Difficulty | Description | Baseline LLM Score |
 |------|-----------|-------------|-------------------|
-| `task_easy` | Easy | Clean consumer request — classify 16 fields as personal vs internal data | 0.65–0.75 |
+| `task_easy` | Easy | Clean consumer request — classify 17 fields as personal vs internal data | 0.45–0.60 |
 | `task_medium` | Medium | Mismatched identity verification + support ticket redaction at sentence level | 0.45–0.55 |
 | `task_hard` | Hard | Weaponised employee DSAR on Slack export with mixed-ownership messages | 0.20–0.35 |
 
 ### Task 1: Clean Consumer Request (Easy)
 
-A customer submits a straightforward DSAR. The agent receives a merged record with 16 fields from billing and CRM databases — 9 fields are personal data (name, email, payment history, etc.) and 7 are internal business data (risk scores, churn probability, infrastructure keys, etc.). The agent must classify each field correctly.
+A customer submits a straightforward DSAR. The agent receives a merged record with 17 fields from billing and CRM databases — 10 fields are personal data (name, email, payment history, referral credits, etc.) and 7 are internal business data (customer health score, engagement index, lifetime value estimate, infrastructure keys, etc.). The agent must classify each field correctly.
 
 **Skills tested**: Semantic understanding of data field types, distinguishing personal from operational data.
 
@@ -53,7 +53,7 @@ A former employee's lawyer submits a broad DSAR requesting all Slack messages me
 |-------|------|-------------|
 | `task_id` | string | Current task identifier |
 | `dsar_request` | string | The DSAR request letter |
-| `merged_record` | dict | All data fields and their values |
+| `merged_record` | dict | Currently revealed data fields and their values |
 | `available_actions` | list[str] | Available action types |
 | `silo_results` | list[str] | Silos queried so far |
 | `identity_verified` | bool | Whether identity has been confirmed |
@@ -84,15 +84,20 @@ A former employee's lawyer submits a broad DSAR requesting all Slack messages me
 
 ```
 F1 = harmonic_mean(precision, recall)
-privacy_penalty = leaked_count × 0.30 × (1 + leaked_count × 0.50)
-silo_bonus = max(0, 0.05 - unnecessary_queries × 0.02)
-score = clamp(F1 - privacy_penalty + silo_bonus, 0.0, 1.0)
+privacy_penalty = leaked_count × 0.30 × (1 + leaked_count × 0.45)
+compliance_score = clamp(F1 - privacy_penalty, 0.0, 1.0)
+step_efficiency = clamp((MAX_STEPS - steps_used) / (MAX_STEPS - MIN_STEPS_CASE1), 0.0, 1.0)
+silo_efficiency = max(0, 1.0 - 0.5 * missing_required_silos - 0.25 * extra_silos)
+efficiency_score = 0.5 * step_efficiency + 0.5 * silo_efficiency
+score = 0.0 if compliance_score == 0 else clamp(0.9 * compliance_score + 0.1 * efficiency_score, 0.0, 1.0)
 ```
 
 The **non-linear privacy penalty** makes each additional leak progressively more expensive:
-- 1 leak → 0.45 penalty
-- 2 leaks → 1.20 penalty (floors score to 0.0)
-- 3 leaks → 2.25 penalty
+- 1 leak → 0.435 penalty
+- 2 leaks → 1.14 penalty (floors score to 0.0)
+- 3 leaks → 2.115 penalty
+
+This formula keeps **compliance accuracy primary**, while still explicitly rewarding step efficiency and correct silo usage.
 
 ## Setup & Usage
 
@@ -111,8 +116,8 @@ pip install -e .
 uvicorn server.app:app --host 0.0.0.0 --port 8000
 
 # In another terminal, run the baseline agent
-API_BASE_URL=https://api.groq.com/openai/v1 \
-MODEL_NAME=llama-3.3-70b-versatile \
+API_BASE_URL=https://api.openai.com/v1 \
+MODEL_NAME=gpt-4o-mini \
 HF_TOKEN=your_key \
 python inference.py
 ```
@@ -134,7 +139,7 @@ openenv push --repo-id your-username/dsar-env
 
 | Task | Expected Range | Description |
 |------|---------------|-------------|
-| `task_easy` | 0.65–0.75 | LLM handles obvious fields but leaks 1-2 operational metrics |
+| `task_easy` | 0.45–0.60 | LLM handles obvious fields but still leaks or misses some operational metrics |
 | `task_medium` | 0.45–0.55 | Verification usually OK but sentence-level redaction is imprecise |
 | `task_hard` | 0.20–0.35 | Thread resolution fails, Article 9 escalation missed |
 

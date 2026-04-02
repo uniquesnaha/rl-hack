@@ -6,14 +6,16 @@ This script demonstrates the DSAR environment by running an LLM agent
 against all three tasks and reporting scores.
 
 Environment variables required:
-    API_BASE_URL  — The API endpoint for the LLM (e.g., https://api.groq.com/openai/v1)
-    MODEL_NAME    — The model to use (e.g., llama-3.3-70b-versatile)
-    HF_TOKEN      — HuggingFace / API key (also used as OPENAI_API_KEY)
+    API_BASE_URL  — The API endpoint for the LLM (e.g., https://api.openai.com/v1)
+    MODEL_NAME    — The model to use (e.g., gpt-4o-mini)
+    HF_TOKEN      — API key (also used as OPENAI_API_KEY fallback)
+    EPISODE_SEED  — Optional fixed seed for reproducible environment resets (default: 42)
 
 Usage:
-    API_BASE_URL=https://api.groq.com/openai/v1 \
-    MODEL_NAME=llama-3.3-70b-versatile \
+    API_BASE_URL=https://api.openai.com/v1 \
+    MODEL_NAME=gpt-4o-mini \
     HF_TOKEN=your_key \
+    EPISODE_SEED=42 \
     python inference.py
 """
 
@@ -26,17 +28,19 @@ import time
 from openai import OpenAI
 
 # ─── Configuration ────────────────────────────────────────────────────────────
-API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.groq.com/openai/v1")
-MODEL_NAME = os.environ.get("MODEL_NAME", "llama-3.3-70b-versatile")
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openai.com/v1")
+MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini")
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 TEMPERATURE = 0.0   # must be 0.0 for reproducible hackathon scores
 MAX_TOKENS = 512
 MAX_STEPS = 30
+EPISODE_SEED = int(os.environ.get("EPISODE_SEED", "42"))
 
 # OpenAI-compatible client pointing at the configured LLM provider
 client = OpenAI(
     base_url=API_BASE_URL,
-    api_key=HF_TOKEN or os.environ.get("OPENAI_API_KEY", ""),
+    api_key=HF_TOKEN or OPENAI_API_KEY,
 )
 
 # ─── System prompt ────────────────────────────────────────────────────────────
@@ -59,6 +63,8 @@ Available actions (respond with EXACTLY ONE per turn):
   compile_response            — Finalize and submit your classification
 
 CRITICAL RULES:
+- Before ANY classify_field action, you must have already queried BOTH silos.
+- If either billing or crm has not been queried yet, your next action must be the missing query_silo action.
 - NEVER classify a field that appears in the ALREADY CLASSIFIED list
 - NEVER query the same silo twice
 - Only call compile_response when ALL PENDING fields have been classified
@@ -128,6 +134,12 @@ def format_observation(obs: dict) -> str:
     else:
         parts.append("Silos already queried: NONE — you must query billing and crm first")
 
+    missing_silos = [silo for silo in ("billing", "crm") if silo not in silos_queried]
+    if missing_silos:
+        parts.append(
+            f"Required next step: query the remaining silo(s) before any classification: {', '.join(missing_silos)}"
+        )
+
     if classified:
         parts.append(f"\n⚠ ALREADY CLASSIFIED ({len(classified)} fields — DO NOT re-classify these):\n  {', '.join(sorted(classified))}")
 
@@ -175,8 +187,11 @@ def format_observation(obs: dict) -> str:
                 f"    Value: {val_str}\n"
                 f"    {desc}"
             )
-    else:
+    elif customer_record:
         parts.append("\n✓ All fields classified. Call compile_response now.")
+    else:
+        parts.append("\n=== NO FIELDS REVEALED YET ===")
+        parts.append("Query billing and crm to reveal the customer record before classifying anything.")
 
     if obs.get("error"):
         parts.append(f"\n⚠ Last action error: {obs['error']}")
@@ -203,7 +218,7 @@ def run_episode(env_url: str, task_id: str) -> float:
     # ── Reset the environment ─────────────────────────────────────────────
     reset_resp = requests.post(
         f"{env_url}/reset",
-        json={"task_id": task_id, "seed": 42},   # fixed seed → reproducible field values
+        json={"task_id": task_id, "seed": EPISODE_SEED},   # fixed seed → reproducible field values
         timeout=30,
     )
     reset_resp.raise_for_status()
@@ -217,6 +232,7 @@ def run_episode(env_url: str, task_id: str) -> float:
 
     record = observation.get("customer_record", [])
     print(f"Episode ID: {episode_id}")
+    print(f"Seed: {EPISODE_SEED}")
     print(f"Fields in record: {len(record)}")
 
     history = []

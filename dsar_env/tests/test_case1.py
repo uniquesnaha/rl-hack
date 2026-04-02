@@ -4,10 +4,7 @@ Unit tests for DSAR Environment — Case 1.
 Tests cover:
   - Generator produces correct field counts and rich FieldItem dicts
   - Grader step rewards match frozen spec
-  - Grader terminal scoring with FROZEN FORMULA:
-      task1_score = schema_gate × clamp(F1 - privacy_penalty + silo_bonus, 0.0, 1.0)
-      privacy_penalty = n × 0.30 × (1 + n × 0.50)  [non-linear]
-      silo_bonus = max(0, 0.05 - unnecessary × 0.02)
+  - Grader terminal scoring with explicit compliance + efficiency weighting
   - constraint_violated triggers on >2 leaks
   - Score always in [0.0, 1.0]
 """
@@ -19,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from server.generator import generate_case1_episode
 from server.grader import compute_step_reward, compute_terminal_score
+from server.dsar_environment import DSAREnvironment
 from server.constants import (
     REQUESTER_DATA_FIELDS,
     INTERNAL_ONLY_FIELDS,
@@ -32,9 +30,9 @@ class TestGenerator:
 
     def test_field_count(self):
         record, values, gt, text = generate_case1_episode(seed=42)
-        assert len(record) == 16, f"Expected 16 FieldItems, got {len(record)}"
-        assert len(values) == 16
-        assert len(gt) == 16
+        assert len(record) == 17, f"Expected 17 FieldItems, got {len(record)}"
+        assert len(values) == 17
+        assert len(gt) == 17
 
     def test_requester_fields_present(self):
         record, values, gt, _ = generate_case1_episode(seed=42)
@@ -68,9 +66,9 @@ class TestGenerator:
         assert isinstance(values["payment_history"], list)
         assert len(values["payment_history"]) >= 2
 
-    def test_risk_score_range(self):
+    def test_customer_health_score_range(self):
         _, values, _, _ = generate_case1_episode(seed=42)
-        assert 0.0 <= values["risk_score"] <= 1.0
+        assert 0.0 <= values["customer_health_score"] <= 100.0
 
     def test_field_items_have_rich_metadata(self):
         """Each FieldItem dict must have all 6 required keys."""
@@ -129,7 +127,7 @@ class TestStepRewards:
 
     def test_correct_withhold(self):
         r = compute_step_reward(
-            "classify_field", field_id="risk_score", decision="withhold",
+            "classify_field", field_id="customer_health_score", decision="withhold",
             ground_truth=FIELD_GROUND_TRUTH,
             queried_silos=set(), classified_fields=set(), step_number=1,
         )
@@ -137,7 +135,7 @@ class TestStepRewards:
 
     def test_leak_penalty(self):
         r = compute_step_reward(
-            "classify_field", field_id="churn_probability", decision="disclose",
+            "classify_field", field_id="engagement_index", decision="disclose",
             ground_truth=FIELD_GROUND_TRUTH,
             queried_silos=set(), classified_fields=set(), step_number=1,
         )
@@ -167,35 +165,45 @@ class TestStepRewards:
         )
         assert r == 0.05
 
+    def test_unrevealed_field_penalty(self):
+        r = compute_step_reward(
+            "classify_field",
+            field_id="full_name",
+            decision="disclose",
+            ground_truth=FIELD_GROUND_TRUTH,
+            queried_silos=set(),
+            classified_fields=set(),
+            visible_field_ids=set(),
+            step_number=1,
+        )
+        assert r == -0.05
+
 
 class TestTerminalScoring:
-    """Tests for terminal grader — FROZEN SPEC formula:
-       task1_score = schema_gate × clamp(F1 - privacy_penalty + silo_bonus, 0.0, 1.0)
-       privacy_penalty = n × 0.30 × (1 + n × 0.50)
-       silo_bonus = max(0, 0.05 - unnecessary × 0.02)
+    """Tests for terminal grader — explicit compliance + efficiency formula:
+       compliance_score = clamp(F1 - privacy_penalty, 0.0, 1.0)
+       efficiency_score = 0.5 × step_efficiency + 0.5 × silo_efficiency
+       final_score = 0.0 if compliance_score == 0 else
+                     clamp(0.9 × compliance_score + 0.1 × efficiency_score, 0.0, 1.0)
     """
 
     def test_perfect_classification(self):
-        """All 9 requester fields disclosed, 0 leaks → F1=1.0, penalty=0, bonus=0.05 → 1.0"""
+        """All requester fields disclosed with required silos and low steps → 1.0."""
         draft = {f: "value" for f in REQUESTER_DATA_FIELDS}
         score = compute_terminal_score(draft, FIELD_GROUND_TRUTH, {"billing", "crm"}, steps_used=12)
-        # score = clamp(1.0 - 0 + 0.05, 0, 1) = 1.0
         assert score == 1.0, f"Perfect classification should score 1.0, got {score}"
 
     def test_one_leak_penalty(self):
-        """1 leak: privacy_penalty = 1 × 0.30 × 1.5 = 0.45 — meaningful, not trivial."""
+        """One leak should still score mid-range, not near-perfect."""
         draft = {f: "value" for f in REQUESTER_DATA_FIELDS}
-        draft["churn_probability"] = 0.5  # 1 internal field leaked
+        draft["customer_health_score"] = 78.4  # 1 internal field leaked
         score = compute_terminal_score(draft, FIELD_GROUND_TRUTH, {"billing", "crm"}, steps_used=14)
-        # precision = 9/10 = 0.9, recall = 1.0, F1 = 2*0.9/(1.9) ≈ 0.947
-        # penalty = 0.45, bonus = 0.05
-        # score = clamp(0.947 - 0.45 + 0.05, 0, 1) = 0.547
-        assert 0.50 <= score <= 0.60, f"One leak should score ~0.547, got {score}"
+        assert 0.56 <= score <= 0.57, f"One leak should score ~0.566, got {score}"
 
     def test_one_leak_penalty_is_significant(self):
-        """One leak must cost ~0.45 — NOT the trivial 0.021 of the G1 formula."""
+        """One leak must still cost ~0.44 — NOT the trivial 0.021 of the G1 formula."""
         draft = {f: "value" for f in REQUESTER_DATA_FIELDS}
-        draft["churn_probability"] = 0.5
+        draft["customer_health_score"] = 78.4
         score_clean = compute_terminal_score(
             {f: "v" for f in REQUESTER_DATA_FIELDS}, FIELD_GROUND_TRUTH, {"billing", "crm"}
         )
@@ -204,49 +212,41 @@ class TestTerminalScoring:
         assert penalty_impact >= 0.40, f"One leak should cost at least 0.40 points, cost {penalty_impact:.3f}"
 
     def test_two_leaks_floors_to_zero(self):
-        """2 leaks: penalty = 2×0.30×2.0 = 1.20 — floors score to 0.0."""
+        """2 leaks: penalty = 2×0.30×1.9 = 1.14 — still floors score to 0.0."""
         draft = {f: "value" for f in REQUESTER_DATA_FIELDS}
-        draft["churn_probability"] = 0.5
-        draft["risk_score"] = 0.7
+        draft["customer_health_score"] = 78.4
+        draft["engagement_index"] = 63.2
         score = compute_terminal_score(draft, FIELD_GROUND_TRUTH, {"billing", "crm"}, steps_used=16)
-        # penalty = 1.20 — way above any F1, so raw < 0 → floored to 0.0
         assert score == 0.0, f"Two leaks should floor to 0.0, got {score}"
 
     def test_empty_draft(self):
-        """Empty draft → F1=0, penalty=0, bonus=0.05 → score=0.05"""
+        """Empty draft should stay at zero because compliance collapses to zero."""
         score = compute_terminal_score({}, FIELD_GROUND_TRUTH, {"billing", "crm"}, steps_used=5)
-        assert abs(score - 0.05) < 0.001, f"Empty draft should give 0.05 (silo bonus only), got {score}"
+        assert score == 0.0, f"Empty draft should give 0.0 when compliance score is zero, got {score}"
 
     def test_empty_draft_no_silos(self):
-        """Empty draft, no silos queried → bonus = 0.05 (no unnecessary), F1=0 → 0.05"""
+        """No-effort draft should still score zero even without extra silo mistakes."""
         score = compute_terminal_score({}, FIELD_GROUND_TRUTH, set(), steps_used=5)
-        # no unnecessary queries, so bonus still 0.05
-        assert abs(score - 0.05) < 0.001, f"Expected 0.05, got {score}"
+        assert score == 0.0, f"Expected 0.0 when compliance score is zero, got {score}"
 
     def test_disclose_everything_floors_to_zero(self):
-        """Disclosing all 16 fields: massive leak penalty obliterates F1."""
+        """Disclosing all 17 fields: massive leak penalty obliterates F1."""
         all_fields = list(REQUESTER_DATA_FIELDS) + list(INTERNAL_ONLY_FIELDS)
         draft = {f: "value" for f in all_fields}
         score = compute_terminal_score(draft, FIELD_GROUND_TRUTH, {"billing", "crm"}, steps_used=18)
-        # penalty = 7×0.30×(1+7×0.5) = 7×0.30×4.5 = 9.45 — catastrophically above any F1
+        # penalty = 7×0.30×(1+7×0.45) = 7×0.30×4.15 = 8.715 — catastrophically above any F1
         assert score == 0.0, f"Disclosing everything should floor to 0.0, got {score}"
 
-    def test_unnecessary_silo_reduces_bonus(self):
-        """Extra silo queries reduce silo_bonus by 0.02 per unnecessary silo.
-
-        Must use a partial draft (F1 < 1.0) so the difference isn't
-        masked by clamping at 1.0.
-        """
-        # 8 of 9 requester fields → F1 ≈ 0.94 (well below 1.0 so clamping doesn't hide the diff)
+    def test_unnecessary_silo_reduces_efficiency_score(self):
+        """Extra silo queries should reduce the explicit efficiency component."""
         partial_draft = {f: "v" for i, f in enumerate(REQUESTER_DATA_FIELDS) if i < 8}
         score_clean = compute_terminal_score(partial_draft, FIELD_GROUND_TRUTH, {"billing", "crm"})
         score_extra = compute_terminal_score(partial_draft, FIELD_GROUND_TRUTH, {"billing", "crm", "hr"})
-        # extra 1 unnecessary → bonus = max(0, 0.05 - 0.02) = 0.03 vs 0.05
         assert score_clean > score_extra, (
             f"Unnecessary silo query should reduce score: clean={score_clean}, extra={score_extra}"
         )
         diff = round(score_clean - score_extra, 4)
-        assert abs(diff - 0.02) < 0.001, f"One unnecessary query should cost 0.02, cost {diff}"
+        assert abs(diff - 0.0125) < 0.001, f"One unnecessary query should cost 0.0125, cost {diff}"
 
     def test_schema_gate_invalid_keys(self):
         """Non-string keys must fail schema gate → 0.0."""
@@ -282,19 +282,21 @@ class TestTerminalScoring:
         """Verify penalty grows non-linearly: 2 leaks cost MORE than 2 × (1 leak cost)."""
         # 1 leak cost
         draft_1 = {f: "v" for f in REQUESTER_DATA_FIELDS}
-        draft_1["churn_probability"] = 0.5
+        draft_1["customer_health_score"] = 78.4
         s1 = compute_terminal_score(draft_1, FIELD_GROUND_TRUTH, {"billing", "crm"})
 
         # 2 leaks cost
         draft_2 = {f: "v" for f in REQUESTER_DATA_FIELDS}
-        draft_2["churn_probability"] = 0.5
-        draft_2["risk_score"] = 0.7
+        draft_2["customer_health_score"] = 78.4
+        draft_2["engagement_index"] = 63.2
         s2 = compute_terminal_score(draft_2, FIELD_GROUND_TRUTH, {"billing", "crm"})
 
         # Perfect score
-        s_perfect = 1.0
+        s_perfect = compute_terminal_score(
+            {f: "v" for f in REQUESTER_DATA_FIELDS}, FIELD_GROUND_TRUTH, {"billing", "crm"}
+        )
 
-        drop_1 = s_perfect - s1  # ~0.45
+        drop_1 = s_perfect - s1  # ~0.44
         drop_2 = s_perfect - 0.0  # 1.00 (floored)
 
         assert drop_2 > 2 * drop_1, (
@@ -302,21 +304,65 @@ class TestTerminalScoring:
         )
 
     def test_baseline_target_range(self):
-        """Typical baseline LLM: 8/9 correct, 1 leak → ~0.45-0.60 with frozen formula."""
+        """Typical baseline LLM: 8/10 correct, 1 leak → mid-range score."""
         draft = {}
         for i, f in enumerate(REQUESTER_DATA_FIELDS):
             if i < 8:
                 draft[f] = "value"
-        draft["churn_probability"] = 0.5  # 1 leak
+        draft["customer_health_score"] = 78.4  # 1 leak
         score = compute_terminal_score(draft, FIELD_GROUND_TRUTH, {"billing", "crm"}, steps_used=14)
-        # precision=8/9=0.889, recall=8/9=0.889, F1=0.889
-        # penalty = 0.45, bonus = 0.05
-        # score = clamp(0.889 - 0.45 + 0.05, 0, 1) = 0.489
-        assert 0.40 <= score <= 0.60, f"Baseline scenario should be ~0.49, got {score}"
+        assert 0.46 <= score <= 0.47, f"Baseline scenario should be mid-range, got {score}"
+
+
+class TestEnvironmentFlow:
+    """Environment-level tests for Case 1 progressive disclosure."""
+
+    def test_reset_starts_with_no_visible_fields(self):
+        env = DSAREnvironment()
+        obs = env.reset(seed=42, task_id="task_easy")
+        assert obs.customer_record == []
+        assert obs.silo_results == []
+
+    def test_query_reveals_only_requested_silo(self):
+        env = DSAREnvironment()
+        obs = env.reset(seed=42, task_id="task_easy")
+        ep_id = obs.episode_id
+
+        after_billing = env.step({
+            "action_type": "query_silo",
+            "silo_name": "billing",
+            "metadata": {"episode_id": ep_id},
+        })
+        assert after_billing.silo_results == ["billing"]
+        assert len(after_billing.customer_record) > 0
+        assert all(item.source_silo == "billing" for item in after_billing.customer_record)
+
+        after_crm = env.step({
+            "action_type": "query_silo",
+            "silo_name": "crm",
+            "metadata": {"episode_id": ep_id},
+        })
+        assert set(after_crm.silo_results) == {"billing", "crm"}
+        assert len(after_crm.customer_record) == 17
+
+    def test_cannot_classify_unrevealed_field(self):
+        env = DSAREnvironment()
+        obs = env.reset(seed=42, task_id="task_easy")
+        ep_id = obs.episode_id
+
+        result = env.step({
+            "action_type": "classify_field",
+            "field_id": "full_name",
+            "decision": "disclose",
+            "metadata": {"episode_id": ep_id},
+        })
+        assert result.reward == -0.05
+        assert result.error is not None
+        assert "not visible yet" in result.error
 
 
 if __name__ == "__main__":
-    test_classes = [TestGenerator, TestStepRewards, TestTerminalScoring]
+    test_classes = [TestGenerator, TestStepRewards, TestTerminalScoring, TestEnvironmentFlow]
     total = 0
     passed = 0
     failed = 0

@@ -12,7 +12,7 @@ When a person writes to a company saying *"Give me all the data you have on me"*
 2. **Withhold** all internal business data (risk scores, churn models, internal notes)
 3. **Not leak** sensitive operational data alongside the personal data
 
-The catch: in real companies, personal data and internal data sit **mixed together** in the same databases. A CRM record for "Sarah Mitchell" contains her email (personal, must disclose) right next to her churn_probability of 0.73 (internal, must withhold).
+The catch: in real companies, personal data and internal data sit **mixed together** in the same databases. A CRM record for "Sarah Mitchell" contains her email (personal, must disclose) right next to her customer_health_score of 78.4 (internal, must withhold).
 
 Today, compliance teams do this **manually** at ~$1,500 per request, with volumes growing 43% year-over-year.
 
@@ -29,7 +29,7 @@ graph LR
     end
     
     subgraph "Agent (inference.py)"
-        LLM[LLM via Groq/OpenAI] --> P[Action Parser]
+        LLM[LLM via OpenAI-Compatible API] --> P[Action Parser]
         P --> |sends action| E
         E --> |returns observation + reward| LLM
     end
@@ -41,27 +41,27 @@ graph LR
 
 ### Component 1: The Generator (`server/generator.py`)
 
-Every time an episode starts, the generator creates a **fresh synthetic patient record** — 16 data fields with randomized values:
+Every time an episode starts, the generator creates a **fresh synthetic customer record** — 17 data fields with randomized values:
 
 | Category | Count | Example Fields |
 |----------|-------|----------------|
-| **REQUESTER_DATA** (must disclose) | 9 | full_name, email, billing_address, payment_history, subscription_plan, marketing_preferences, product_usage_summary, support_ticket_ids, subscription_start_date |
-| **INTERNAL_ONLY** (must withhold) | 7 | risk_score, churn_probability, profit_tier, shard_routing_key, account_manager_notes, lead_source_tag, campaign_cpa |
+| **REQUESTER_DATA** (must disclose) | 10 | full_name, email, billing_address, payment_history, subscription_plan, referral_credit_balance, marketing_preferences, product_usage_summary, support_ticket_ids, subscription_start_date |
+| **INTERNAL_ONLY** (must withhold) | 7 | customer_health_score, engagement_index, lifetime_value_estimate, profit_tier, shard_routing_key, account_manager_notes, campaign_cpa |
 
 Each field comes as a rich **FieldItem** with metadata:
 
 ```python
 {
-    "field_id": "churn_probability",
-    "field_name": "Churn Probability",
-    "field_value": 0.73,
+    "field_id": "customer_health_score",
+    "field_name": "Customer Health Score",
+    "field_value": 78.4,
     "source_silo": "crm",
     "datatype": "analytical",
-    "field_description": "Model-predicted probability that the account will cancel within the next quarter."
+    "field_description": "A composite score reflecting account activity, payment consistency, and feature adoption over the trailing 90 days."
 }
 ```
 
-> **Why randomize values but keep field names fixed?** Because the RL agent must learn the **semantic meaning** of field names ("churn_probability" is always an internal metric), not memorize specific values (0.73 vs 0.41).
+> **Why randomize values but keep field names fixed?** Because the RL agent must learn the **semantic meaning** of field names ("customer_health_score" is an internal account metric), not memorize specific values (78.4 vs 52.1).
 
 > **Why shuffle field order each episode?** So the agent can't learn "field #3 is always internal" — it must read and understand each field.
 
@@ -74,7 +74,7 @@ This is the OpenEnv `Environment` subclass. It manages the episode lifecycle:
 ```
 reset(task_id="task_easy")
   → Creates fresh episode data
-  → Returns initial DSARObservation
+  → Returns initial DSARObservation with the DSAR text and no silo data revealed yet
   
 step(DSARAction)
   → Processes the action (query_silo / classify_field / compile_response)
@@ -108,31 +108,32 @@ The **3x asymmetry** on leaks (-0.30 vs +0.10) is deliberate: one data breach ca
 #### Terminal Score (fires on `compile_response`)
 
 ```
-G1 = max(0, min(1, 0.75 × F1 + 0.15 × (1 - L) + 0.10 × E))
+F1 = harmonic_mean(precision, recall)
+privacy_penalty = leaked_count × 0.30 × (1 + leaked_count × 0.45)
+compliance_score = clamp(F1 - privacy_penalty, 0.0, 1.0)
+step_efficiency = clamp((MAX_STEPS - steps_used) / (MAX_STEPS - MIN_STEPS_CASE1), 0.0, 1.0)
+silo_efficiency = max(0, 1.0 - 0.5 * missing_required_silos - 0.25 * extra_silos)
+efficiency_score = 0.5 * step_efficiency + 0.5 * silo_efficiency
+final_score = 0.0 if compliance_score == 0 else clamp(0.9 * compliance_score + 0.1 * efficiency_score, 0.0, 1.0)
 ```
 
-| Symbol | Meaning | Range |
-|--------|---------|-------|
-| **F1** | Harmonic mean of disclosure precision & recall | 0.0 – 1.0 |
-| **L** | Leakage rate = leaked_count / 7 (total internal fields) | 0.0 – 1.0 |
-| **E** | Efficiency = average of silo_efficiency and step_efficiency | 0.0 – 1.0 |
-
 **Why this formula works well:**
-- **0.75 weight on F1** — Classification accuracy dominates the score
-- **0.15 weight on (1-L)** — Leaking is penalized but doesn't instantly floor the score
-- **0.10 weight on E** — Efficiency matters but doesn't dominate
-- A baseline LLM that gets 8/9 fields right with 1 leak scores ~0.75-0.85
-- A perfect agent scores ~0.99
-- An agent that discloses everything scores ~0.55 (bad precision + full leakage)
+- **F1 dominates** — Classification accuracy is still the main driver of the score
+- **Non-linear leak penalty** — One leak hurts a lot; two leaks floor the score to 0.0
+- **Explicit efficiency terms** — Step count and silo choice now contribute directly instead of being folded in indirectly
+- **Compliance gate** — If compliance collapses to 0, the final score stays 0 even if the agent was efficient
+- A baseline LLM that gets 8/10 requester fields right with 1 leak scores around ~0.46-0.52
+- A perfect, efficient agent scores 1.0
+- An agent that discloses everything scores 0.0 because the leak penalty overwhelms F1
 
 ### Component 4: The Inference Script (`inference.py`)
 
-This is the **baseline agent** — an LLM called via OpenAI-compatible API:
+This is the **baseline agent** — an LLM called via OpenAI-compatible API. The current default configuration uses `gpt-4o-mini`, reads credentials from environment variables, and supports a fixed `EPISODE_SEED` for reproducible resets:
 
 ```
-1. POST /reset → initial observation
+1. POST /reset with a fixed seed (default `EPISODE_SEED=42`) → initial observation
 2. Format observation → send to LLM with system prompt
-3. LLM responds: "classify_field full_name disclose"
+3. LLM responds with exactly one action, querying both silos before any classification
 4. Parse → POST /step → get reward + updated observation
 5. Repeat until done=True
 6. Record score, move to next task
@@ -152,22 +153,22 @@ sequenceDiagram
     participant E as Environment
     participant G as Generator
     participant GR as Grader
-    participant LLM as Groq LLM
+    participant LLM as OpenAI LLM
 
     I->>E: POST /reset (task_id=task_easy)
     E->>G: generate_case1_episode()
     G-->>E: (customer_record, values_lookup, ground_truth, dsar_text)
-    E-->>I: DSARObservation (16 fields, steps_remaining=30)
+    E-->>I: DSARObservation (0 revealed fields, steps_remaining=30)
     
     I->>LLM: "Here's the DSAR and record. What action?"
     LLM-->>I: "query_silo billing"
     I->>E: POST /step (query_silo billing)
-    E-->>I: reward=+0.05, steps_remaining=29
+    E-->>I: reward=+0.05, billing fields revealed, steps_remaining=29
     
     I->>LLM: "Updated observation. Next action?"
     LLM-->>I: "query_silo crm"
     I->>E: POST /step (query_silo crm)
-    E-->>I: reward=+0.05, steps_remaining=28
+    E-->>I: reward=+0.05, crm fields revealed, steps_remaining=28
     
     I->>LLM: "Both silos queried. Classify fields now."
     LLM-->>I: "classify_field full_name disclose"
@@ -177,9 +178,9 @@ sequenceDiagram
     
     Note over I,LLM: ... repeats for each field ...
     
-    LLM-->>I: "classify_field churn_probability disclose"
-    I->>E: POST /step (classify_field churn_probability disclose)
-    Note over E: ground_truth["churn_probability"] = INTERNAL_ONLY ✗ LEAK!
+    LLM-->>I: "classify_field customer_health_score disclose"
+    I->>E: POST /step (classify_field customer_health_score disclose)
+    Note over E: ground_truth["customer_health_score"] = INTERNAL_ONLY ✗ LEAK!
     E-->>I: reward=-0.30, steps_remaining=15
     
     Note over I,LLM: ... more classifications ...
@@ -187,8 +188,8 @@ sequenceDiagram
     LLM-->>I: "compile_response"
     I->>E: POST /step (compile_response)
     E->>GR: compute_terminal_score(draft, ground_truth, silos, steps)
-    GR-->>E: 0.8234
-    E-->>I: reward=0.8234, done=True
+    GR-->>E: 0.5656
+    E-->>I: reward=0.5656, done=True
 ```
 
 ---
@@ -197,7 +198,7 @@ sequenceDiagram
 
 | Task | What Changes | Why It's Harder |
 |------|-------------|-----------------|
-| **task_easy** | Clean consumer, 16 flat fields, identity pre-verified | Agent just classifies by field name semantics |
+| **task_easy** | Clean consumer, 17 flat fields with a few intentionally ambiguous semantics, identity pre-verified | Agent must separate clearly personal data from plausible-but-internal business metrics |
 | **task_medium** | Different email than account, support ticket transcripts | Must verify identity proportionally, redact at sentence level |
 | **task_hard** | Employee Slack export, threaded messages, aliased user IDs | Must resolve aliases, split mixed-ownership sentences, handle Article 9 escalation |
 
@@ -216,9 +217,9 @@ This is where the real value lies. The environment we built is a **training gymn
 LLM reads observation → decides action → environment scores it
 ```
 
-A raw LLM with no RL training scores **0.65-0.75** on task_easy. It makes mistakes because:
-- It sometimes leaks `account_manager_notes` (sounds like it could be customer-facing)
-- It sometimes withholds `support_ticket_ids` (doesn't realize these belong to the customer)
+A raw LLM with no RL training usually scores **0.45-0.60** on task_easy under this scorer. It makes mistakes because:
+- It sometimes leaks `customer_health_score` (the word "health" sounds personal even though the field is internal)
+- It sometimes withholds `referral_credit_balance` (it sounds like an internal finance metric even though it belongs to the customer)
 - It redundantly classifies fields or takes too many steps
 
 ### Phase 2: Supervised Fine-Tuning (SFT) Warm-Start
@@ -407,15 +408,15 @@ dsar_env/
 │
 ├── server/
 │   ├── __init__.py
-│   ├── constants.py           ← Data pools + FIELD_METADATA (6 pools, 16 field definitions)
+│   ├── constants.py           ← Data pools + FIELD_METADATA (10 pools, 17 field definitions)
 │   ├── generator.py           ← Synthetic data: produces List[FieldItem] + ground_truth
-│   ├── grader.py              ← Step rewards + G1 terminal formula
+│   ├── grader.py              ← Step rewards + compliance/efficiency terminal formula
 │   ├── dsar_environment.py    ← DSAREnvironment(Environment) + _EPISODES store
 │   └── app.py                 ← create_app(DSAREnvironment, DSARAction, DSARObservation)
 │
 └── tests/
     ├── __init__.py
-    └── test_case1.py           ← 33 tests: generator, step rewards, terminal scoring
+    └── test_case1.py           ← 38 tests: generator, step rewards, terminal scoring
 ```
 
 ---
@@ -425,18 +426,18 @@ dsar_env/
 | Criterion | Weight | How We Score |
 |-----------|--------|-------------|
 | **Real-world utility** | 30% | DSAR processing is a $1,500/request legally mandated task in 30+ countries. No existing RL environment covers this. |
-| **Task & grader quality** | 25% | 3 tasks with progressive difficulty. Grader is deterministic, reproducible, scores 0.0-1.0. Dense step rewards + terminal scoring. |
+| **Task & grader quality** | 25% | Case 1 is fully implemented with deterministic, reproducible grading and dense step rewards. Tasks 2 & 3 are scaffolded to extend that progression. |
 | **Environment design** | 20% | Clean reset/step/state lifecycle. Rich typed observation space. Asymmetric reward shaping. Multi-step trajectory. |
-| **Code quality & spec** | 15% | OpenEnv spec compliant. Pydantic typed models. 33 passing tests. Dockerfile builds. |
+| **Code quality & spec** | 15% | OpenEnv spec compliant. Pydantic typed models. 38 passing tests. Dockerfile builds. |
 | **Creativity & novelty** | 10% | First DSAR/privacy compliance RL environment. Non-linear penalty design. FieldItem metadata for semantic reasoning. |
 
 ---
 
 ## Summary
 
-This environment turns a **$1,500 manual compliance task** into a **structured RL training problem**. An untrained LLM scores 0.65-0.75. With RL post-training (PPO/GRPO running thousands of episodes against the reward function), an agent can learn to score **0.90+** by:
+This environment turns a **$1,500 manual compliance task** into a **structured RL training problem**. The current default baseline uses `gpt-4o-mini` with a fixed `EPISODE_SEED` for reproducibility and usually lands around **0.45-0.60** on the hardened Case 1 scorer. With RL post-training (PPO/GRPO running thousands of episodes against the reward function), an agent can learn to score **0.90+** by:
 
-1. Always querying both silos first
+1. Querying both silos first to reveal the full record
 2. Correctly identifying personal data fields by semantic understanding
 3. Never leaking internal analytical metrics
 4. Operating efficiently within the step budget

@@ -21,9 +21,9 @@ from .constants import (
     EMAIL_DOMAINS,
     FIELD_GROUND_TRUTH,
     FIELD_METADATA,
-    LEAD_SOURCE_TAGS,
     MARKETING_PREFERENCES,
     PROFIT_TIERS,
+    REFERRAL_CREDIT_BALANCES,
     REQUESTER_NAMES,
     SHARD_ROUTING_KEYS,
     SUBSCRIPTION_PLANS,
@@ -76,6 +76,17 @@ def _make_subscription_start(rng: random.Random) -> str:
     return (start + timedelta(days=rng.randint(0, days_range))).isoformat()
 
 
+def _make_request_date(rng: random.Random) -> str:
+    """Generate a seed-stable DSAR request date.
+
+    Using the current wall-clock date would make identical seeds produce
+    different prompt text on different days, which weakens reproducibility.
+    """
+    start = date(2026, 1, 1)
+    days_range = 119  # Through 2026-04-30.
+    return (start + timedelta(days=rng.randint(0, days_range))).isoformat()
+
+
 def _build_field_item(field_id: str, value: Any) -> Dict[str, Any]:
     """Build a FieldItem dict from a field_id and its generated value.
 
@@ -114,7 +125,7 @@ def generate_case1_episode(
 
     Returns:
         Tuple of (customer_record, values_lookup, ground_truth, dsar_request_text):
-        - customer_record: list of FieldItem dicts (16 items: 9 requester + 7 internal)
+        - customer_record: list of FieldItem dicts (17 items: 10 requester + 7 internal)
         - values_lookup: flat dict of {field_id: value} for grader/draft_response use
         - ground_truth: dict mapping field_id to 'REQUESTER_DATA' or 'INTERNAL_ONLY'
         - dsar_request_text: the DSAR ticket text shown to the agent
@@ -135,6 +146,7 @@ def generate_case1_episode(
         "subscription_plan": rng.choice(SUBSCRIPTION_PLANS),
         "subscription_start_date": _make_subscription_start(rng),
         "payment_history": _make_payment_history(rng),
+        "referral_credit_balance": round(rng.choice(REFERRAL_CREDIT_BALANCES), 2),
         "marketing_preferences": rng.choice(MARKETING_PREFERENCES),
         "product_usage_summary": _make_usage_summary(rng),
         "support_ticket_ids": _make_ticket_ids(rng),
@@ -142,12 +154,12 @@ def generate_case1_episode(
 
     # ── Build raw values: 7 INTERNAL_ONLY fields ─────────────────────────
     raw_values.update({
-        "risk_score": round(rng.uniform(0.0, 1.0), 2),
-        "churn_probability": round(rng.uniform(0.0, 1.0), 2),
+        "customer_health_score": round(rng.uniform(0.0, 100.0), 1),
+        "engagement_index": round(rng.uniform(0.0, 100.0), 1),
+        "lifetime_value_estimate": round(rng.uniform(150.0, 5000.0), 2),
         "profit_tier": rng.choice(PROFIT_TIERS),
         "shard_routing_key": rng.choice(SHARD_ROUTING_KEYS),
         "account_manager_notes": rng.choice(ACCOUNT_MANAGER_NOTES),
-        "lead_source_tag": rng.choice(LEAD_SOURCE_TAGS),
         "campaign_cpa": round(rng.uniform(8.0, 45.0), 2),
     })
 
@@ -163,7 +175,7 @@ def generate_case1_episode(
     ground_truth = dict(FIELD_GROUND_TRUTH)  # copy the fixed mapping
 
     # ── DSAR request text ─────────────────────────────────────────────────
-    request_date = date.today().isoformat()
+    request_date = _make_request_date(rng)
     dsar_text = CASE1_DSAR_TEMPLATE.format(
         email=email,
         full_name=full_name,

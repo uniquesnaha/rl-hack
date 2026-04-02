@@ -49,7 +49,7 @@ class FieldItem(BaseModel):
 
     field_id: str = Field(
         ...,
-        description="Unique identifier for this field (e.g., 'full_name', 'risk_score')",
+        description="Unique identifier for this field (e.g., 'full_name', 'customer_health_score')",
     )
     field_name: str = Field(
         ...,

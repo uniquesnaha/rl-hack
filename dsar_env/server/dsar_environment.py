@@ -41,6 +41,7 @@ class EpisodeData:
     ground_truth: Dict[str, str]            # {field_id: 'REQUESTER_DATA'|'INTERNAL_ONLY'}
     dsar_text: str
     queried_silos: set = dc_field(default_factory=set)
+    visible_field_ids: set = dc_field(default_factory=set)
     classified_fields: set = dc_field(default_factory=set)
     draft_response: Dict[str, Any] = dc_field(default_factory=dict)
     audit_trail: list = dc_field(default_factory=list)  # List[AuditEntry]
@@ -61,6 +62,20 @@ def _cleanup_old_episodes(max_episodes: int = 100) -> None:
         keys = list(_EPISODES.keys())
         for k in keys[: len(keys) - max_episodes]:
             del _EPISODES[k]
+
+
+def _visible_field_items(episode: EpisodeData) -> List[FieldItem]:
+    """Return the currently revealed fields in their original episode order."""
+    return [
+        FieldItem(**item)
+        for item in episode.customer_record
+        if item["field_id"] in episode.visible_field_ids
+    ]
+
+
+def _sorted_values(values: set) -> List[str]:
+    """Return a deterministic list representation for observation payloads."""
+    return sorted(str(v) for v in values)
 
 
 class DSAREnvironment(Environment):
@@ -124,9 +139,6 @@ class DSAREnvironment(Environment):
         )
         _EPISODES[ep_id] = episode
 
-        # Build initial observation — customer_record as FieldItem models
-        field_items = [FieldItem(**fi) for fi in customer_record]
-
         return DSARObservation(
             done=False,
             reward=0.0,
@@ -134,7 +146,7 @@ class DSAREnvironment(Environment):
             episode_id=ep_id,
             task_id=task_id,
             dsar_request=dsar_text,
-            customer_record=field_items,
+            customer_record=[],
             available_actions=["query_silo", "classify_field", "compile_response"],
             silo_results=[],
             identity_verified=True,
@@ -197,7 +209,7 @@ class DSAREnvironment(Environment):
         episode = _EPISODES[ep_id]
 
         if episode.done:
-            field_items = [FieldItem(**fi) for fi in episode.customer_record]
+            field_items = _visible_field_items(episode)
             return DSARObservation(
                 done=True,
                 reward=0.0,
@@ -208,8 +220,8 @@ class DSAREnvironment(Environment):
                 customer_record=field_items,
                 draft_response=episode.draft_response,
                 audit_trail=episode.audit_trail,
-                classified_fields=list(episode.classified_fields),
-                silo_results=list(episode.queried_silos),
+                classified_fields=_sorted_values(episode.classified_fields),
+                silo_results=_sorted_values(episode.queried_silos),
                 steps_remaining=0,
                 deadline_pressure=0.0,
                 error="Episode already finished.",
@@ -227,6 +239,7 @@ class DSAREnvironment(Environment):
         # state at the time the action was taken, not after. This prevents
         # every valid action looking "redundant" to the reward function.
         pre_queried_silos = frozenset(episode.queried_silos)
+        pre_visible_field_ids = frozenset(episode.visible_field_ids)
         pre_classified_fields = frozenset(episode.classified_fields)
 
         # ── Process: query_silo ───────────────────────────────────────────
@@ -234,7 +247,13 @@ class DSAREnvironment(Environment):
             silo = dsar_action.silo_name
             if silo and silo not in episode.queried_silos and silo in CASE1_VALID_SILOS:
                 episode.queried_silos.add(silo)
-                desc = f"Successfully queried silo '{silo}'"
+                newly_revealed = {
+                    item["field_id"]
+                    for item in episode.customer_record
+                    if item["source_silo"] in {silo, "both"}
+                } - episode.visible_field_ids
+                episode.visible_field_ids.update(newly_revealed)
+                desc = f"Successfully queried silo '{silo}' and revealed {len(newly_revealed)} field(s)"
             elif silo and silo in episode.queried_silos:
                 error_msg = f"Silo '{silo}' already queried this episode."
                 desc = f"Redundant query: silo '{silo}' already queried"
@@ -247,7 +266,10 @@ class DSAREnvironment(Environment):
             fid = dsar_action.field_id
             dec = dsar_action.decision
 
-            if fid and fid in episode.ground_truth and fid not in episode.classified_fields:
+            if fid and fid in episode.ground_truth and fid not in episode.visible_field_ids:
+                error_msg = f"Field '{fid}' is not visible yet. Query the relevant silo first."
+                desc = f"Attempted to classify unrevealed field '{fid}'"
+            elif fid and fid in episode.ground_truth and fid not in episode.classified_fields:
                 episode.classified_fields.add(fid)
                 if dec == "disclose":
                     episode.draft_response[fid] = episode.values_lookup.get(fid)
@@ -282,6 +304,7 @@ class DSAREnvironment(Environment):
             ground_truth=episode.ground_truth,
             queried_silos=pre_queried_silos,
             classified_fields=pre_classified_fields,
+            visible_field_ids=pre_visible_field_ids,
             step_number=episode.step_count,
             task_id=episode.task_id,
         )
@@ -305,7 +328,7 @@ class DSAREnvironment(Environment):
                 description=f"Episode terminated: leaked {episode.leaked_count} internal fields (limit is 2)",
                 reward=0.0,
             ))
-            field_items = [FieldItem(**fi) for fi in episode.customer_record]
+            field_items = _visible_field_items(episode)
             steps_remaining = max(0, MAX_STEPS - episode.step_count)
             return DSARObservation(
                 done=True,
@@ -324,8 +347,8 @@ class DSAREnvironment(Environment):
                 customer_record=field_items,
                 draft_response=episode.draft_response,
                 audit_trail=episode.audit_trail,
-                classified_fields=list(episode.classified_fields),
-                silo_results=list(episode.queried_silos),
+                classified_fields=_sorted_values(episode.classified_fields),
+                silo_results=_sorted_values(episode.queried_silos),
                 steps_remaining=steps_remaining,
                 deadline_pressure=steps_remaining / MAX_STEPS,
                 constraint_violated=True,
@@ -350,7 +373,7 @@ class DSAREnvironment(Environment):
             ))
             episode.cumulative_reward += terminal_score
 
-            field_items = [FieldItem(**fi) for fi in episode.customer_record]
+            field_items = _visible_field_items(episode)
             steps_remaining = max(0, MAX_STEPS - episode.step_count)
             return DSARObservation(
                 done=True,
@@ -370,8 +393,8 @@ class DSAREnvironment(Environment):
                 customer_record=field_items,
                 draft_response=episode.draft_response,
                 audit_trail=episode.audit_trail,
-                classified_fields=list(episode.classified_fields),
-                silo_results=list(episode.queried_silos),
+                classified_fields=_sorted_values(episode.classified_fields),
+                silo_results=_sorted_values(episode.queried_silos),
                 steps_remaining=steps_remaining,
                 deadline_pressure=steps_remaining / MAX_STEPS,
                 constraint_violated=episode.constraint_violated,
@@ -402,7 +425,7 @@ class DSAREnvironment(Environment):
             step_reward += terminal_score
 
         # ── Build observation ─────────────────────────────────────────────
-        field_items = [FieldItem(**fi) for fi in episode.customer_record]
+        field_items = _visible_field_items(episode)
         return DSARObservation(
             done=is_done or episode.done,
             reward=step_reward,
@@ -417,13 +440,13 @@ class DSAREnvironment(Environment):
             dsar_request=episode.dsar_text,
             customer_record=field_items,
             available_actions=["query_silo", "classify_field", "compile_response"],
-            silo_results=list(episode.queried_silos),
+            silo_results=_sorted_values(episode.queried_silos),
             identity_verified=True,
             draft_response=episode.draft_response,
             audit_trail=episode.audit_trail,
             deadline_pressure=max(0.0, steps_remaining / MAX_STEPS),
             steps_remaining=max(0, steps_remaining),
-            classified_fields=list(episode.classified_fields),
+            classified_fields=_sorted_values(episode.classified_fields),
             constraint_violated=episode.constraint_violated,
             error=error_msg,
         )

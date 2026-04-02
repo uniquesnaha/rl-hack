@@ -76,6 +76,9 @@ PROFIT_TIERS = ["low-margin", "mid-tier", "high-value"]
 # ─── Pool 9: Marketing preferences ───────────────────────────────────────────
 MARKETING_PREFERENCES = ["email_opted_in", "all_opted_out", "sms_only"]
 
+# ─── Pool 10: Referral credit balances ──────────────────────────────────────
+REFERRAL_CREDIT_BALANCES = [0.0, 5.0, 10.0, 15.0, 25.0, 40.0, 75.0, 120.0]
+
 # ─── Field classification ground truth ────────────────────────────────────────
 # This mapping NEVER changes. Only values change per episode.
 # The agent must learn to classify by field semantics, not memorise.
@@ -87,18 +90,19 @@ REQUESTER_DATA_FIELDS = [
     "subscription_plan",
     "subscription_start_date",
     "payment_history",
+    "referral_credit_balance",
     "marketing_preferences",
     "product_usage_summary",
     "support_ticket_ids",
 ]
 
 INTERNAL_ONLY_FIELDS = [
-    "risk_score",
-    "churn_probability",
+    "customer_health_score",
+    "engagement_index",
+    "lifetime_value_estimate",
     "profit_tier",
     "shard_routing_key",
     "account_manager_notes",
-    "lead_source_tag",
     "campaign_cpa",
 ]
 
@@ -153,6 +157,12 @@ FIELD_METADATA = {
         "financial",
         "Record of payments made by the individual, including dates and amounts.",
     ),
+    "referral_credit_balance": (
+        "Referral Credit Balance",
+        "billing",
+        "financial",
+        "The outstanding credit balance accrued through the referral programme, applicable to future billing cycles.",
+    ),
     "marketing_preferences": (
         "Marketing Preferences",
         "crm",
@@ -173,17 +183,23 @@ FIELD_METADATA = {
     ),
 
     # INTERNAL_ONLY fields
-    "risk_score": (
-        "Risk Score",
+    "customer_health_score": (
+        "Customer Health Score",
         "crm",
         "analytical",
-        "A numerical score computed from account behaviour, payment patterns, and engagement signals.",
+        "A composite score reflecting account activity, payment consistency, and feature adoption over the trailing 90 days.",
     ),
-    "churn_probability": (
-        "Churn Probability",
+    "engagement_index": (
+        "Engagement Index",
         "crm",
         "analytical",
-        "A model-predicted probability score that the account will not renew in the next quarter.",
+        "A normalised index derived from recent product activity, support interactions, and feature utilisation patterns.",
+    ),
+    "lifetime_value_estimate": (
+        "Lifetime Value Estimate",
+        "billing",
+        "analytical",
+        "A projected revenue figure calculated from the account's current plan, usage patterns, and historical retention data.",
     ),
     "profit_tier": (
         "Profit Tier",
@@ -202,12 +218,6 @@ FIELD_METADATA = {
         "crm",
         "operational",
         "Free-text notes written by the assigned account manager about strategy, renewal risk, and engagement history.",
-    ),
-    "lead_source_tag": (
-        "Lead Source Tag",
-        "crm",
-        "operational",
-        "A tag recorded at account creation indicating which acquisition channel or campaign sourced this customer.",
     ),
     "campaign_cpa": (
         "Campaign CPA",
