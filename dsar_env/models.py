@@ -1,13 +1,10 @@
 """
-DSAR Compliance Environment — Pydantic models for actions, observations, and field items.
+DSAR Compliance Environment - Pydantic models for actions, observations, and
+ticket/field items.
 
 Action and Observation inherit from OpenEnv's Pydantic BaseModel types.
-The Observation base class already provides `done`, `reward`, and `metadata` fields.
-
-Note: The environment returns Observation subclasses with `done` and `reward` set.
-The framework's HTTPEnvServer serializes these into StepResponse/ResetResponse.
-If a future OpenEnv version changes this contract, the environment logic in
-dsar_environment.py should be updated to match — treat this as version-sensitive.
+The Observation base class already provides `done`, `reward`, and `metadata`
+fields.
 """
 
 from typing import Any, Dict, List, Optional
@@ -20,40 +17,25 @@ except ImportError:
     from openenv.core.env_server.types import Action, Observation
 
 
-# ─── AuditEntry: per-step action log ────────────────────────────────────────────
-
 class AuditEntry(BaseModel):
-    """A single entry in the episode audit trail.
-
-    Every step appends one AuditEntry with a plain-English description of
-    what happened — one of the confirmed USPs for judging transparency.
-    """
+    """A single entry in the episode audit trail."""
 
     step: int = Field(..., description="Step number (1-indexed) when this entry was recorded")
-    action: str = Field(..., description="Action type: query_silo, classify_field, compile_response")
+    action: str = Field(..., description="Action type executed at this step")
     description: str = Field(..., description="Plain-English description of what happened")
     reward: float = Field(default=0.0, description="Immediate reward received for this action")
 
 
-# ─── FieldItem: rich per-field metadata ───────────────────────────────────────
-
 class FieldItem(BaseModel):
-    """A single field in the customer record with rich metadata.
-
-    This structured representation provides the agent with semantic context
-    about each field — not just the raw column name and value, but also
-    where it came from, what type of data it is, and a human-readable
-    description. This makes the classification task genuinely semantic
-    rather than simple column-name guessing.
-    """
+    """A single structured field in the customer record."""
 
     field_id: str = Field(
         ...,
-        description="Unique identifier for this field (e.g., 'full_name', 'customer_health_score')",
+        description="Unique identifier for this field (for example 'full_name')",
     )
     field_name: str = Field(
         ...,
-        description="Human-readable name (e.g., 'Full Name', 'Risk Score')",
+        description="Human-readable name of the field",
     )
     field_value: Any = Field(
         ...,
@@ -65,7 +47,7 @@ class FieldItem(BaseModel):
     )
     datatype: str = Field(
         ...,
-        description="Data type category ('personal_identifier', 'financial', 'behavioral', 'operational', 'infrastructure', 'analytical')",
+        description="Semantic datatype category for the field",
     )
     field_description: str = Field(
         ...,
@@ -73,20 +55,46 @@ class FieldItem(BaseModel):
     )
 
 
-# ─── DSARAction ───────────────────────────────────────────────────────────────
+class TicketSentenceItem(BaseModel):
+    """A single sentence within a support ticket thread."""
+
+    sentence_index: int = Field(..., description="Sentence index unique within the ticket")
+    speaker: str = Field(..., description="Speaker role: customer or support")
+    text: str = Field(..., description="Sentence text shown to the agent")
+
+
+class TicketMessageItem(BaseModel):
+    """A single message within a support ticket thread."""
+
+    message_index: int = Field(..., description="Message index unique within the ticket")
+    speaker: str = Field(..., description="Speaker role: customer or support")
+    text: str = Field(..., description="Full message text")
+    sentences: List[TicketSentenceItem] = Field(
+        default_factory=list,
+        description="Sentence-indexed fragments for sentence-level redaction decisions",
+    )
+
+
+class TicketItem(BaseModel):
+    """A support ticket thread visible during Case 2 redaction."""
+
+    ticket_id: str = Field(..., description="Unique ticket identifier")
+    category: str = Field(..., description="Ticket archetype/category")
+    messages: List[TicketMessageItem] = Field(
+        default_factory=list,
+        description="Ordered support-ticket messages with sentence indexing",
+    )
+
 
 class DSARAction(Action):
-    """Action sent by the agent to the DSAR environment.
-
-    Three action types are supported:
-    - query_silo: Query a data silo for records (billing, crm)
-    - classify_field: Classify a field as disclose or withhold
-    - compile_response: Finalize the response and trigger terminal grading
-    """
+    """Action sent by the agent to the DSAR environment."""
 
     action_type: str = Field(
         ...,
-        description="Type of action: 'query_silo', 'classify_field', or 'compile_response'",
+        description=(
+            "Type of action: 'query_silo', 'classify_field', "
+            "'verify_identity', 'redact_span', or 'compile_response'"
+        ),
     )
     silo_name: Optional[str] = Field(
         default=None,
@@ -98,40 +106,41 @@ class DSARAction(Action):
     )
     decision: Optional[str] = Field(
         default=None,
-        description="For classify_field: 'disclose' or 'withhold'",
+        description=(
+            "For classify_field: 'disclose' or 'withhold'. "
+            "For redact_span: 'keep' or 'redact'."
+        ),
+    )
+    verification_method: Optional[str] = Field(
+        default=None,
+        description=(
+            "For verify_identity: one of transaction_date, account_reference, "
+            "registered_postcode, passport_copy, or photo_id"
+        ),
+    )
+    ticket_id: Optional[str] = Field(
+        default=None,
+        description="For redact_span: ticket identifier",
+    )
+    sentence_index: Optional[int] = Field(
+        default=None,
+        description="For redact_span: sentence index within the ticket",
     )
 
-
-# ─── DSARObservation ──────────────────────────────────────────────────────────
 
 class DSARObservation(Observation):
-    """Observation returned by the DSAR environment.
+    """Observation returned by the DSAR environment."""
 
-    Inherits from Observation which provides:
-    - done: bool (whether episode has terminated)
-    - reward: float | None (reward signal from last action)
-    - metadata: Dict[str, Any] (additional metadata)
-    """
-
-    episode_id: str = Field(
-        default="",
-        description="The unique UUID for this episode",
-    )
-    task_id: str = Field(
-        default="task_easy",
-        description="Current task identifier",
-    )
-    dsar_request: str = Field(
-        default="",
-        description="The DSAR ticket text describing the request",
-    )
+    episode_id: str = Field(default="", description="The unique UUID for this episode")
+    task_id: str = Field(default="task_easy", description="Current task identifier")
+    dsar_request: str = Field(default="", description="The DSAR ticket text describing the request")
     customer_record: List[FieldItem] = Field(
         default_factory=list,
-        description="Structured list of all fields in the data subject's record, with metadata",
+        description="Structured list of currently visible fields in the data subject's record",
     )
     available_actions: List[str] = Field(
         default_factory=lambda: ["query_silo", "classify_field", "compile_response"],
-        description="List of available action types",
+        description="List of available action types at this point in the episode",
     )
     silo_results: List[str] = Field(
         default_factory=list,
@@ -143,15 +152,15 @@ class DSARObservation(Observation):
     )
     draft_response: Dict[str, Any] = Field(
         default_factory=dict,
-        description="Fields the agent has chosen to disclose so far",
+        description="Current draft disclosure/redaction output for the episode",
     )
     audit_trail: List[AuditEntry] = Field(
         default_factory=list,
-        description="Ordered log of AuditEntry objects — one per step, with plain-English descriptions",
+        description="Ordered log of audit entries, one per step",
     )
     deadline_pressure: float = Field(
         default=1.0,
-        description="Normalised time pressure: 1.0 (start) → 0.0 (deadline). Calculated as steps_remaining/max_steps",
+        description="Normalized time pressure: 1.0 at start to 0.0 at deadline",
     )
     steps_remaining: int = Field(
         default=30,
@@ -159,13 +168,59 @@ class DSARObservation(Observation):
     )
     classified_fields: List[str] = Field(
         default_factory=list,
-        description="Field IDs that have already been classified this episode",
+        description="Case 1 field IDs that have already been classified",
     )
     constraint_violated: bool = Field(
         default=False,
-        description="True when agent has leaked more than 2 internal fields — triggers immediate episode termination",
+        description="True when a hard environment constraint was violated",
     )
     error: Optional[str] = Field(
         default=None,
         description="Error message if the last action was invalid",
+    )
+
+    # Case 2 specific fields
+    phase: str = Field(
+        default="classification",
+        description="Current episode phase: classification, identity, or redaction",
+    )
+    identity_confidence: float = Field(
+        default=1.0,
+        description="Current identity confidence score used in Case 2 verification",
+    )
+    identity_threshold: float = Field(
+        default=1.0,
+        description="Identity confidence threshold required to unlock redaction",
+    )
+    submitted_identity: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Identity details supplied by the requester",
+    )
+    internal_identity: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Internal identity evidence currently visible to the agent",
+    )
+    tickets: List[TicketItem] = Field(
+        default_factory=list,
+        description="Support ticket corpus visible during Case 2 redaction",
+    )
+    processed_sentences: Dict[str, Dict[int, str]] = Field(
+        default_factory=dict,
+        description="Sentence-level Case 2 decisions keyed by ticket and sentence index",
+    )
+    pending_sentence_count: int = Field(
+        default=0,
+        description="Number of Case 2 ticket sentences still awaiting a keep/redact decision",
+    )
+    total_sentence_count: int = Field(
+        default=0,
+        description="Total number of Case 2 ticket sentences in the current episode",
+    )
+    completion_coverage: float = Field(
+        default=0.0,
+        description="Fraction of Case 2 ticket sentences already processed",
+    )
+    compile_ready: bool = Field(
+        default=False,
+        description="Whether the episode has satisfied the requirements to call compile_response",
     )
