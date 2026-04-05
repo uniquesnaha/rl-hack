@@ -30,6 +30,9 @@ import re
 import sys
 import time
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from openai import OpenAI
 
 
@@ -64,6 +67,11 @@ MULTI_SEED_VALUES = [
     for seed in os.environ.get("DSAR_MULTI_SEED", "").split(",")
     if seed.strip()
 ]
+TASK_SEEDS = {}
+for item in os.environ.get("DSAR_TASK_SEEDS", "").split(","):
+    if ":" in item:
+        k, v = item.split(":")
+        TASK_SEEDS[k.strip()] = _parse_optional_int(v.strip())
 
 # OpenAI-compatible client pointing at the configured LLM provider.
 def _select_api_key(base_url: str) -> str:
@@ -943,8 +951,9 @@ def run_episode(env_url: str, task_id: str) -> dict:
     print(f"{'=' * 60}")
 
     reset_payload = {"task_id": task_id}
-    if EPISODE_SEED is not None:
-        reset_payload["seed"] = EPISODE_SEED
+    current_seed = TASK_SEEDS.get(task_id, EPISODE_SEED)
+    if current_seed is not None:
+        reset_payload["seed"] = current_seed
 
     trace("RESET REQUEST", {"url": f"{env_url}/reset", "json": reset_payload})
 
@@ -966,8 +975,8 @@ def run_episode(env_url: str, task_id: str) -> dict:
 
     record = observation.get("customer_record", [])
     print(f"Episode ID: {episode_id}")
-    if EPISODE_SEED is not None:
-        print(f"Seed: {EPISODE_SEED}")
+    if current_seed is not None:
+        print(f"Seed: {current_seed}")
     else:
         print("Seed: random")
     print(f"Fields in record: {len(record)}")
@@ -1155,6 +1164,8 @@ def main() -> None:
     print(f"DSAR Environment URL: {env_url}")
     print(f"LLM API: {API_BASE_URL}")
     print(f"Model: {MODEL_NAME}")
+    if TASK_SEEDS:
+        print(f"Task Seeds: {TASK_SEEDS}")
     print(f"{'=' * 60}")
 
     import requests
