@@ -86,6 +86,34 @@ class TicketItem(BaseModel):
     )
 
 
+class SlackSentenceItem(BaseModel):
+    """A single sentence fragment within a Slack message."""
+
+    sentence_idx: int = Field(..., description="Sentence index unique within the Slack message")
+    text: str = Field(..., description="Sentence text shown to the agent")
+
+
+class SlackMessageItem(BaseModel):
+    """A single Slack export message visible during Case 3 triage."""
+
+    msg_id: str = Field(..., description="Stable message identifier for processing actions")
+    user: str = Field(..., description="Slack user ID for the message author")
+    text: str = Field(..., description="Full Slack message text")
+    ts: str = Field(..., description="Slack-style timestamp string")
+    thread_ts: Optional[str] = Field(
+        default=None,
+        description="Parent thread timestamp if this message is part of a thread",
+    )
+    subtype: Optional[str] = Field(
+        default=None,
+        description="Slack message subtype, e.g. bot_message",
+    )
+    sentences: List[SlackSentenceItem] = Field(
+        default_factory=list,
+        description="Deterministic sentence fragments for sentence-level redaction decisions",
+    )
+
+
 class DSARAction(Action):
     """Action sent by the agent to the DSAR environment."""
 
@@ -93,7 +121,8 @@ class DSARAction(Action):
         ...,
         description=(
             "Type of action: 'query_silo', 'classify_field', "
-            "'verify_identity', 'redact_span', or 'compile_response'"
+            "'verify_identity', 'redact_span', 'process_message', "
+            "'redact_sentence', 'escalate_with_reason', or 'compile_response'"
         ),
     )
     silo_name: Optional[str] = Field(
@@ -125,6 +154,27 @@ class DSARAction(Action):
     sentence_index: Optional[int] = Field(
         default=None,
         description="For redact_span: sentence index within the ticket",
+    )
+    msg_id: Optional[str] = Field(
+        default=None,
+        description="For process_message/redact_sentence/escalate_with_reason: Slack message ID",
+    )
+    action_label: Optional[str] = Field(
+        default=None,
+        description=(
+            "For process_message: one of disclose, partial_redact, exclude, or escalate"
+        ),
+    )
+    reason: Optional[str] = Field(
+        default=None,
+        description="For escalate_with_reason: written legal justification",
+    )
+    reason_code: Optional[str] = Field(
+        default=None,
+        description=(
+            "For escalate_with_reason: structured escalation code such as "
+            "special_category_health_data"
+        ),
     )
 
 
@@ -223,4 +273,38 @@ class DSARObservation(Observation):
     compile_ready: bool = Field(
         default=False,
         description="Whether the episode has satisfied the requirements to call compile_response",
+    )
+    terminal_details: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Terminal metrics and failure summaries for completed episodes",
+    )
+
+    # Case 3 specific fields
+    slack_export: List[SlackMessageItem] = Field(
+        default_factory=list,
+        description="Candidate Slack messages surfaced for Case 3 compliance triage",
+    )
+    users_json: Dict[str, Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Visible Slack user mapping keyed by user ID",
+    )
+    processed_messages: Dict[str, Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="Case 3 message-level decisions keyed by Slack message ID",
+    )
+    escalation_log: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Case 3 escalation reasons keyed by Slack message ID",
+    )
+    escalation_reason_codes: Dict[str, str] = Field(
+        default_factory=dict,
+        description="Case 3 structured escalation reason codes keyed by Slack message ID",
+    )
+    messages_pending: List[str] = Field(
+        default_factory=list,
+        description="Case 3 message IDs that still need a process_message decision",
+    )
+    sentences_pending: Dict[str, List[int]] = Field(
+        default_factory=dict,
+        description="Case 3 unresolved sentence indices for messages awaiting sentence decisions",
     )

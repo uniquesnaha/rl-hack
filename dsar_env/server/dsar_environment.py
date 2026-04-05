@@ -18,18 +18,30 @@ from dsar_env.models import (
     DSARAction,
     DSARObservation,
     FieldItem,
+    SlackMessageItem,
+    SlackSentenceItem,
     TicketItem,
     TicketMessageItem,
     TicketSentenceItem,
 )
-from .constants import CASE1_VALID_SILOS, CASE2_VALID_SILOS, MAX_STEPS
-from .generator import generate_case1_episode, generate_case2_episode
+from .constants import (
+    CASE1_VALID_SILOS,
+    CASE2_VALID_SILOS,
+    CASE3_ACTION_ESCALATE,
+    CASE3_ACTION_PARTIAL_REDACT,
+    CASE3_MAX_STEPS,
+    CASE3_REASON_CODES,
+    MAX_STEPS,
+)
+from .generator import generate_case1_episode, generate_case2_episode, generate_case3_episode
 from .grader import (
     compute_step_reward,
     compute_step_reward_case2,
+    compute_step_reward_case3,
     compute_terminal_score,
     compute_terminal_score_case2,
     compute_terminal_score_case2_details,
+    compute_terminal_score_case3,
 )
 
 
@@ -39,7 +51,7 @@ class EpisodeData:
     task_id: str
     customer_record: List[Dict[str, Any]]
     values_lookup: Dict[str, Any]
-    ground_truth: Dict[str, str]
+    ground_truth: Dict[str, Any]
     dsar_text: str
     queried_silos: set = dc_field(default_factory=set)
     visible_field_ids: set = dc_field(default_factory=set)
@@ -70,6 +82,16 @@ class EpisodeData:
     phase1_reward_sum: float = 0.0
     leaked_pii_sentences: int = 0
     blocked_compile_attempts: int = 0
+    slack_export: List[Dict[str, Any]] = dc_field(default_factory=list)
+    users_json: Dict[str, Dict[str, Any]] = dc_field(default_factory=dict)
+    processed_messages: Dict[str, Dict[str, Any]] = dc_field(default_factory=dict)
+    escalation_log: Dict[str, str] = dc_field(default_factory=dict)
+    escalation_reason_codes: Dict[str, str] = dc_field(default_factory=dict)
+    special_category_message_ids: List[str] = dc_field(default_factory=list)
+    mixed_sentence_message_id: str = ""
+    thread_parent_id: str = ""
+    thread_reply_id: str = ""
+    bot_message_id: str = ""
 
 
 _EPISODES: Dict[str, EpisodeData] = {}
@@ -106,6 +128,23 @@ def _ticket_items(tickets: List[Dict[str, Any]]) -> List[TicketItem]:
     return out
 
 
+def _slack_items(messages: List[Dict[str, Any]]) -> List[SlackMessageItem]:
+    out: List[SlackMessageItem] = []
+    for message in messages:
+        out.append(
+            SlackMessageItem(
+                msg_id=message["msg_id"],
+                user=message["user"],
+                text=message["text"],
+                ts=message["ts"],
+                thread_ts=message.get("thread_ts"),
+                subtype=message.get("subtype"),
+                sentences=[SlackSentenceItem(**s) for s in message.get("sentences", [])],
+            )
+        )
+    return out
+
+
 def _sorted_values(values: set) -> List[str]:
     return sorted(str(v) for v in values)
 
@@ -135,6 +174,63 @@ def _case2_progress(episode: EpisodeData) -> tuple[int, int, float]:
     processed_count = sum(len(sentence_map) for sentence_map in episode.processed_sentences.values())
     coverage = processed_count / total_count if total_count > 0 else 0.0
     return processed_count, total_count, coverage
+
+
+def _case3_pending_messages(episode: EpisodeData) -> List[str]:
+    return sorted(
+        message["msg_id"]
+        for message in episode.slack_export
+        if message["msg_id"] not in episode.processed_messages
+    )
+
+
+def _case3_sentences_pending(episode: EpisodeData) -> Dict[str, List[int]]:
+    pending: Dict[str, List[int]] = {}
+    for message in episode.slack_export:
+        msg_id = message["msg_id"]
+        decision = episode.processed_messages.get(msg_id, {})
+        sentence_ground_truth = episode.ground_truth.get(msg_id, {}).get("sentence_ground_truth")
+        if decision.get("action") != CASE3_ACTION_PARTIAL_REDACT or not sentence_ground_truth:
+            continue
+        sentence_decisions = decision.get("sentence_decisions", {})
+        unresolved = [
+            sentence["sentence_idx"]
+            for sentence in message.get("sentences", [])
+            if sentence["sentence_idx"] in sentence_ground_truth
+            and sentence["sentence_idx"] not in sentence_decisions
+        ]
+        if unresolved:
+            pending[msg_id] = unresolved
+    return pending
+
+
+def _all_case3_messages_processed(episode: EpisodeData) -> bool:
+    return len(episode.processed_messages) == len(episode.slack_export)
+
+
+def _all_case3_escalations_completed(episode: EpisodeData) -> bool:
+    for msg_id, decision in episode.processed_messages.items():
+        if (
+            decision.get("action") == CASE3_ACTION_ESCALATE
+            and (
+                msg_id not in episode.escalation_log
+                or msg_id not in episode.escalation_reason_codes
+            )
+        ):
+            return False
+    return True
+
+
+def _case3_compile_ready(episode: EpisodeData) -> bool:
+    return (
+        _all_case3_messages_processed(episode)
+        and not _case3_sentences_pending(episode)
+        and _all_case3_escalations_completed(episode)
+    )
+
+
+def _max_steps_for_episode(episode: EpisodeData) -> int:
+    return CASE3_MAX_STEPS if episode.task_id == "task_hard" else MAX_STEPS
 
 
 class DSAREnvironment(Environment):
@@ -168,11 +264,29 @@ class DSAREnvironment(Environment):
                 tickets=bundle["tickets"],
                 ticket_ground_truth=bundle["ticket_ground_truth"],
             )
+        elif task_id == "task_hard":
+            bundle = generate_case3_episode(seed=seed)
+            episode = EpisodeData(
+                episode_id=ep_id,
+                task_id=task_id,
+                customer_record=[],
+                values_lookup={},
+                ground_truth=bundle["ground_truth"],
+                dsar_text=bundle["dsar_text"],
+                phase="triage",
+                slack_export=bundle["messages"],
+                users_json=bundle["users_json"],
+                special_category_message_ids=bundle["special_category_message_ids"],
+                mixed_sentence_message_id=bundle["mixed_sentence_message_id"],
+                thread_parent_id=bundle["thread_parent_id"],
+                thread_reply_id=bundle["thread_reply_id"],
+                bot_message_id=bundle["bot_message_id"],
+            )
         else:
             customer_record, values_lookup, ground_truth, dsar_text = generate_case1_episode(seed=seed)
             episode = EpisodeData(
                 episode_id=ep_id,
-                task_id=task_id if task_id in {"task_easy", "task_hard"} else "task_easy",
+                task_id=task_id if task_id == "task_easy" else "task_easy",
                 customer_record=customer_record,
                 values_lookup=values_lookup,
                 ground_truth=ground_truth,
@@ -199,6 +313,10 @@ class DSAREnvironment(Environment):
                 verification_method=getattr(action, "verification_method", None),
                 ticket_id=getattr(action, "ticket_id", None),
                 sentence_index=getattr(action, "sentence_index", None),
+                msg_id=getattr(action, "msg_id", None),
+                action_label=getattr(action, "action_label", None),
+                reason=getattr(action, "reason", None),
+                reason_code=getattr(action, "reason_code", None),
                 metadata=getattr(action, "metadata", {}),
             )
 
@@ -212,7 +330,11 @@ class DSAREnvironment(Environment):
 
         episode.step_count += 1
         self._state.step_count = episode.step_count
-        return self._step_case2(episode, dsar_action) if episode.task_id == "task_medium" else self._step_case1(episode, dsar_action)
+        if episode.task_id == "task_medium":
+            return self._step_case2(episode, dsar_action)
+        if episode.task_id == "task_hard":
+            return self._step_case3(episode, dsar_action)
+        return self._step_case1(episode, dsar_action)
 
     def _step_case1(self, episode: EpisodeData, action: DSARAction) -> Observation:
         pre_queried = frozenset(episode.queried_silos)
@@ -278,11 +400,6 @@ class DSAREnvironment(Environment):
         )
         episode.cumulative_reward += step_reward
         episode.audit_trail.append(AuditEntry(step=episode.step_count, action=action.action_type, description=desc, reward=step_reward))
-
-        if episode.leaked_count > 2 and not episode.done:
-            episode.constraint_violated = True
-            episode.done = True
-            return self._build_observation(episode, reward=step_reward, error="CONSTRAINT VIOLATED: Leaked more than 2 internal fields. Episode terminated.", done=True, extra_metadata={"terminal_score": 0.0, "fields_leaked": episode.leaked_count, "steps_used": episode.step_count})
 
         if action.action_type == "compile_response":
             terminal = compute_terminal_score(episode.draft_response, episode.ground_truth, episode.queried_silos, steps_used=episode.step_count, task_id=episode.task_id)
@@ -487,9 +604,233 @@ class DSAREnvironment(Environment):
 
         return self._build_observation(episode, reward=step_reward, error=error)
 
+    def _step_case3(self, episode: EpisodeData, action: DSARAction) -> Observation:
+        pre_processed = {
+            msg_id: {
+                "action": decision.get("action"),
+                "sentence_decisions": dict(decision.get("sentence_decisions", {})),
+            }
+            for msg_id, decision in episode.processed_messages.items()
+        }
+        pre_escalation_log = dict(episode.escalation_log)
+        pre_escalation_reason_codes = dict(episode.escalation_reason_codes)
+        error = None
+        desc = f"Unknown action type: '{action.action_type}'"
+        step_reward_override: Optional[float] = None
+
+        if action.action_type == "process_message":
+            msg_id = action.msg_id
+            action_label = action.action_label
+            valid_actions = {"disclose", "partial_redact", "exclude", "escalate"}
+            if msg_id is None or action_label is None:
+                error = "process_message requires msg_id and action_label."
+                desc = "Missing process_message parameters"
+            elif msg_id not in episode.ground_truth:
+                error = f"Message '{msg_id}' does not exist."
+                desc = f"Invalid message id '{msg_id}'"
+            elif msg_id in episode.processed_messages:
+                error = f"Message '{msg_id}' already processed."
+                desc = f"Repeated process_message on '{msg_id}'"
+            elif action_label not in valid_actions:
+                error = f"Invalid action_label '{action_label}'."
+                desc = f"Invalid Case 3 action label '{action_label}'"
+            else:
+                episode.processed_messages[msg_id] = {"action": action_label, "sentence_decisions": {}}
+                desc = f"Processed message '{msg_id}' with action '{action_label}'"
+        elif action.action_type == "redact_sentence":
+            msg_id = action.msg_id
+            sentence_index = action.sentence_index
+            decision = action.decision
+            if msg_id is None or sentence_index is None or decision is None:
+                error = "redact_sentence requires msg_id, sentence_index, and decision."
+                desc = "Missing redact_sentence parameters"
+            elif msg_id not in episode.processed_messages:
+                error = f"Message '{msg_id}' has not been processed yet."
+                desc = f"redact_sentence before process_message on '{msg_id}'"
+            elif episode.processed_messages[msg_id].get("action") != CASE3_ACTION_PARTIAL_REDACT:
+                error = f"Message '{msg_id}' is not in partial_redact state."
+                desc = f"redact_sentence attempted on non-partial-redact message '{msg_id}'"
+            elif decision not in {"keep", "redact"}:
+                error = "redact_sentence decision must be 'keep' or 'redact'."
+                desc = f"Invalid redact_sentence decision '{decision}'"
+            else:
+                sentence_ground_truth = episode.ground_truth.get(msg_id, {}).get("sentence_ground_truth")
+                if not sentence_ground_truth:
+                    error = f"Message '{msg_id}' does not support sentence-level redaction."
+                    desc = f"redact_sentence attempted on non-sentence-actionable message '{msg_id}'"
+                    sentence_ground_truth = None
+                message = next((msg for msg in episode.slack_export if msg["msg_id"] == msg_id), None)
+                visible_sentence_indices = {
+                    sentence["sentence_idx"] for sentence in (message or {}).get("sentences", [])
+                }
+                if error is not None:
+                    pass
+                elif sentence_index not in visible_sentence_indices or sentence_index not in sentence_ground_truth:
+                    error = f"Sentence index {sentence_index} does not exist in message '{msg_id}'."
+                    desc = f"Invalid sentence index {sentence_index} for '{msg_id}'"
+                elif sentence_index in episode.processed_messages[msg_id].get("sentence_decisions", {}):
+                    error = f"Sentence {sentence_index} in message '{msg_id}' already processed."
+                    desc = f"Repeated redact_sentence on '{msg_id}:{sentence_index}'"
+                else:
+                    episode.processed_messages[msg_id].setdefault("sentence_decisions", {})[sentence_index] = decision
+                    desc = f"Processed sentence {sentence_index} in message '{msg_id}' with decision '{decision}'"
+        elif action.action_type == "escalate_with_reason":
+            msg_id = action.msg_id
+            reason = action.reason
+            reason_code = action.reason_code
+            if msg_id is None or reason is None or reason_code is None:
+                error = "escalate_with_reason requires msg_id, reason_code, and reason."
+                desc = "Missing escalate_with_reason parameters"
+            elif episode.processed_messages.get(msg_id, {}).get("action") != CASE3_ACTION_ESCALATE:
+                error = f"Message '{msg_id}' was not processed as escalate."
+                desc = f"escalate_with_reason attempted on non-escalated message '{msg_id}'"
+            elif msg_id in episode.escalation_log or msg_id in episode.escalation_reason_codes:
+                error = f"Message '{msg_id}' already has an escalation reason."
+                desc = f"Repeated escalation reason for '{msg_id}'"
+            elif reason_code not in CASE3_REASON_CODES:
+                error = f"Invalid reason_code '{reason_code}'."
+                desc = f"Invalid escalation reason_code '{reason_code}'"
+            else:
+                episode.escalation_log[msg_id] = reason
+                episode.escalation_reason_codes[msg_id] = reason_code
+                desc = f"Recorded escalation reason for '{msg_id}' with reason_code '{reason_code}'"
+        elif action.action_type == "compile_response":
+            if not _all_case3_messages_processed(episode):
+                error = "All Slack messages must be processed before compile_response."
+                desc = "compile_response blocked because messages remain unprocessed"
+                step_reward_override = -0.05
+            elif _case3_sentences_pending(episode):
+                error = "All sentence-level redactions must be completed before compile_response."
+                desc = "compile_response blocked because sentence decisions remain pending"
+                step_reward_override = -0.05
+            elif not _all_case3_escalations_completed(episode):
+                error = "All escalated messages must include a reason before compile_response."
+                desc = "compile_response blocked because escalation reasons remain pending"
+                step_reward_override = -0.05
+            else:
+                details = compute_terminal_score_case3(
+                    {
+                        "processed_messages": episode.processed_messages,
+                        "escalation_log": episode.escalation_log,
+                        "escalation_reason_codes": episode.escalation_reason_codes,
+                    },
+                    episode.ground_truth,
+                    episode.special_category_message_ids,
+                    episode.mixed_sentence_message_id,
+                )
+                terminal = details["task3_score"]
+                episode.done = True
+                episode.cumulative_reward += terminal
+                episode.audit_trail.append(
+                    AuditEntry(
+                        step=episode.step_count,
+                        action="compile_response",
+                        description=f"Case 3 response compiled. Terminal score: {terminal:.4f}",
+                        reward=terminal,
+                    )
+                )
+                return self._build_observation(
+                    episode,
+                    reward=terminal,
+                    error=None,
+                    done=True,
+                    extra_metadata={
+                        "terminal_score": terminal,
+                        "cumulative_reward": round(episode.cumulative_reward, 4),
+                        "steps_used": episode.step_count,
+                        **details,
+                    },
+                )
+        else:
+            error = (
+                "Unknown action type for Case 3. Use: process_message, redact_sentence, "
+                "escalate_with_reason, compile_response"
+            )
+
+        step_reward = compute_step_reward_case3(
+            action_type=action.action_type,
+            step_number=episode.step_count,
+            msg_id=action.msg_id,
+            action_label=action.action_label,
+            sentence_index=action.sentence_index,
+            decision=action.decision,
+            reason=action.reason,
+            reason_code=action.reason_code,
+            ground_truth=episode.ground_truth,
+            processed_messages=pre_processed,
+            escalation_log=pre_escalation_log,
+            escalation_reason_codes=pre_escalation_reason_codes,
+        )
+        if step_reward_override is not None:
+            step_reward = step_reward_override
+        episode.cumulative_reward += step_reward
+        episode.audit_trail.append(
+            AuditEntry(step=episode.step_count, action=action.action_type, description=desc, reward=step_reward)
+        )
+
+        if (
+            action.action_type == "process_message"
+            and action.msg_id in episode.special_category_message_ids
+            and action.action_label == "disclose"
+            and not episode.done
+        ):
+            episode.constraint_violated = True
+            episode.done = True
+            details = compute_terminal_score_case3(
+                {
+                    "processed_messages": episode.processed_messages,
+                    "escalation_log": episode.escalation_log,
+                    "escalation_reason_codes": episode.escalation_reason_codes,
+                },
+                episode.ground_truth,
+                episode.special_category_message_ids,
+                episode.mixed_sentence_message_id,
+            )
+            return self._build_observation(
+                episode,
+                reward=step_reward,
+                error="CONSTRAINT VIOLATED: special-category health data was disclosed.",
+                done=True,
+                extra_metadata={
+                    "terminal_score": 0.0,
+                    "steps_used": episode.step_count,
+                    **details,
+                },
+            )
+
+        if _max_steps_for_episode(episode) - episode.step_count <= 0 and not episode.done:
+            details = compute_terminal_score_case3(
+                {
+                    "processed_messages": episode.processed_messages,
+                    "escalation_log": episode.escalation_log,
+                    "escalation_reason_codes": episode.escalation_reason_codes,
+                },
+                episode.ground_truth,
+                episode.special_category_message_ids,
+                episode.mixed_sentence_message_id,
+            )
+            terminal = details["task3_score"]
+            episode.done = True
+            episode.cumulative_reward += terminal
+            return self._build_observation(
+                episode,
+                reward=step_reward + terminal,
+                error=error,
+                done=True,
+                extra_metadata={
+                    "terminal_score": terminal,
+                    "cumulative_reward": round(episode.cumulative_reward, 4),
+                    "steps_used": episode.step_count,
+                    **details,
+                },
+            )
+
+        return self._build_observation(episode, reward=step_reward, error=error)
+
     def _build_observation(self, episode: EpisodeData, reward: float, error: Optional[str], extra_metadata: Optional[Dict[str, Any]] = None, done: Optional[bool] = None) -> DSARObservation:
         extra_metadata = extra_metadata or {}
-        steps_remaining = max(0, MAX_STEPS - episode.step_count)
+        max_steps = _max_steps_for_episode(episode)
+        steps_remaining = max(0, max_steps - episode.step_count)
         metadata = {"episode_id": episode.episode_id, "task_id": episode.task_id, "step_count": episode.step_count, "cumulative_reward": round(episode.cumulative_reward, 4)}
         metadata.update(extra_metadata)
         if episode.task_id == "task_medium":
@@ -512,7 +853,7 @@ class DSAREnvironment(Environment):
                 identity_verified=episode.verification_succeeded,
                 draft_response={"processed_sentences": episode.processed_sentences} if episode.processed_sentences else {},
                 audit_trail=episode.audit_trail,
-                deadline_pressure=max(0.0, steps_remaining / MAX_STEPS),
+                deadline_pressure=max(0.0, steps_remaining / max_steps),
                 steps_remaining=steps_remaining,
                 classified_fields=[],
                 constraint_violated=False,
@@ -528,6 +869,68 @@ class DSAREnvironment(Environment):
                 total_sentence_count=total_count,
                 completion_coverage=coverage,
                 compile_ready=compile_ready,
+                terminal_details=extra_metadata,
+            )
+        if episode.task_id == "task_hard":
+            pending_messages = _case3_pending_messages(episode)
+            sentences_pending = _case3_sentences_pending(episode)
+            compile_ready = _case3_compile_ready(episode)
+            unresolved_escalations = sorted(
+                msg_id
+                for msg_id, decision in episode.processed_messages.items()
+                if decision.get("action") == CASE3_ACTION_ESCALATE
+                and (
+                    msg_id not in episode.escalation_log
+                    or msg_id not in episode.escalation_reason_codes
+                )
+            )
+            if pending_messages:
+                actions = ["process_message"]
+            elif sentences_pending:
+                actions = ["redact_sentence"]
+            elif unresolved_escalations:
+                actions = ["escalate_with_reason"]
+            elif compile_ready:
+                actions = ["compile_response"]
+            else:
+                actions = ["process_message", "redact_sentence", "escalate_with_reason"]
+            return DSARObservation(
+                done=episode.done if done is None else done,
+                reward=reward,
+                metadata=metadata,
+                episode_id=episode.episode_id,
+                task_id=episode.task_id,
+                dsar_request=episode.dsar_text,
+                customer_record=[],
+                available_actions=actions,
+                silo_results=[],
+                identity_verified=True,
+                draft_response={"processed_messages": episode.processed_messages},
+                audit_trail=episode.audit_trail,
+                deadline_pressure=max(0.0, steps_remaining / max_steps),
+                steps_remaining=steps_remaining,
+                classified_fields=[],
+                constraint_violated=episode.constraint_violated,
+                error=error,
+                phase="triage",
+                identity_confidence=1.0,
+                identity_threshold=1.0,
+                submitted_identity={},
+                internal_identity={},
+                tickets=[],
+                processed_sentences={},
+                pending_sentence_count=0,
+                total_sentence_count=0,
+                completion_coverage=1.0 if compile_ready else 0.0,
+                compile_ready=compile_ready,
+                slack_export=_slack_items(episode.slack_export),
+                users_json=episode.users_json,
+                processed_messages=episode.processed_messages,
+                escalation_log=episode.escalation_log,
+                escalation_reason_codes=episode.escalation_reason_codes,
+                messages_pending=pending_messages,
+                sentences_pending=sentences_pending,
+                terminal_details=extra_metadata,
             )
         return DSARObservation(
             done=episode.done if done is None else done,
@@ -542,7 +945,7 @@ class DSAREnvironment(Environment):
             identity_verified=True,
             draft_response=episode.draft_response,
             audit_trail=episode.audit_trail,
-            deadline_pressure=max(0.0, steps_remaining / MAX_STEPS),
+            deadline_pressure=max(0.0, steps_remaining / max_steps),
             steps_remaining=steps_remaining,
             classified_fields=_sorted_values(episode.classified_fields),
             constraint_violated=episode.constraint_violated,
@@ -558,6 +961,14 @@ class DSAREnvironment(Environment):
             total_sentence_count=0,
             completion_coverage=0.0,
             compile_ready=True,
+            terminal_details=extra_metadata,
+            slack_export=[],
+            users_json={},
+            processed_messages={},
+            escalation_log={},
+            escalation_reason_codes={},
+            messages_pending=[],
+            sentences_pending={},
         )
 
     @property

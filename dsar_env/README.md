@@ -19,7 +19,7 @@ This environment trains RL agents to automate the most operationally complex par
 |------|-----------|-------------|-------------------|
 | `task_easy` | Easy | Clean consumer request — classify 17 fields as personal vs internal data | 0.45–0.60 |
 | `task_medium` | Medium | Mismatched identity verification + support ticket redaction at sentence level | 0.45–0.55 |
-| `task_hard` | Hard | Weaponised employee DSAR on Slack export with mixed-ownership messages | 0.20–0.35 |
+| `task_hard` | Hard | Candidate-set Slack DSAR triage with thread resolution, mixed ownership, and Article 9 escalation | Pending re-measurement |
 
 ### Task 1: Clean Consumer Request (Easy)
 
@@ -35,7 +35,7 @@ A former customer submits a DSAR from a different email than their account. The 
 
 ### Task 3: Weaponised Employee DSAR on Slack (Hard)
 
-A former employee's lawyer submits a broad DSAR requesting all Slack messages mentioning them. The agent processes a Slack JSON export with aliased user IDs, threaded messages, bot messages, and sentences containing mixed ownership (requester data + colleague salary info in one sentence; manager performance feedback + manager's health disclosure in another).
+A former employee's lawyer submits a broad workplace-dispute DSAR. IT has already surfaced a candidate set of six potentially responsive Slack messages from the broader export. The agent must triage those candidate messages using a Slack JSON export with aliased user IDs, threaded replies, bot messages, and mixed-ownership sentences (requester data + colleague salary info in one message; manager performance feedback + manager health disclosure in another).
 
 **Skills tested**: User ID resolution, thread context tracking, Article 9 special-category escalation, sentence-level ownership splitting.
 
@@ -45,6 +45,11 @@ A former employee's lawyer submits a broad DSAR requesting all Slack messages me
 |--------|-----------|-------------|
 | `query_silo` | `silo_name`: `"billing"` or `"crm"` | Query a data silo |
 | `classify_field` | `field_id`: field name, `decision`: `"disclose"` or `"withhold"` | Classify a field |
+| `verify_identity` | `verification_method` | Proportionate identity verification for `task_medium` |
+| `redact_span` | `ticket_id`, `sentence_index`, `decision` | Sentence redaction for `task_medium` |
+| `process_message` | `msg_id`, `action_label` | Case 3 message-level triage: disclose, partial_redact, exclude, or escalate |
+| `redact_sentence` | `msg_id`, `sentence_index`, `decision` | Case 3 sentence-level keep/redact decision for mixed-ownership Slack messages |
+| `escalate_with_reason` | `msg_id`, `reason` | Case 3 legal justification for an escalated message |
 | `compile_response` | *(none)* | Finalize and submit response |
 
 ## Observation Space
@@ -62,6 +67,14 @@ A former employee's lawyer submits a broad DSAR requesting all Slack messages me
 | `deadline_pressure` | float | 1.0 (fresh) → 0.0 (deadline) |
 | `steps_remaining` | int | Steps left in episode (max 30) |
 | `classified_fields` | list[str] | Fields already classified |
+| `tickets` | list | Case 2 support-ticket corpus after verification |
+| `processed_sentences` | dict | Case 2 sentence decisions |
+| `slack_export` | list | Case 3 candidate Slack messages with stable sentence indices |
+| `users_json` | dict | Case 3 visible Slack user mapping |
+| `processed_messages` | dict | Case 3 message decisions |
+| `escalation_log` | dict | Case 3 escalation reasons |
+| `messages_pending` | list[str] | Case 3 message IDs still awaiting triage |
+| `sentences_pending` | dict | Case 3 unresolved sentence indices |
 | `done` | bool | Whether episode has ended |
 | `reward` | float | Reward from last action |
 
@@ -136,6 +149,10 @@ openenv push --repo-id your-username/dsar-env
 ```
 
 ## Baseline Scores
+
+Baseline score bands should be re-measured end-to-end with the current
+environment dependencies before final submission. The environment now supports
+all three tasks, including the implemented Case 3 hard task.
 
 | Task | Expected Range | Description |
 |------|---------------|-------------|

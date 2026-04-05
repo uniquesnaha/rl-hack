@@ -5,7 +5,6 @@ Tests cover:
   - Generator produces correct field counts and rich FieldItem dicts
   - Grader step rewards match frozen spec
   - Grader terminal scoring with explicit compliance + efficiency weighting
-  - constraint_violated triggers on >2 leaks
   - Score always in [0.0, 1.0]
 """
 
@@ -135,7 +134,7 @@ class TestStepRewards:
 
     def test_leak_penalty(self):
         r = compute_step_reward(
-            "classify_field", field_id="engagement_index", decision="disclose",
+            "classify_field", field_id="risk_score", decision="disclose",
             ground_truth=FIELD_GROUND_TRUTH,
             queried_silos=set(), classified_fields=set(), step_number=1,
         )
@@ -215,7 +214,7 @@ class TestTerminalScoring:
         """2 leaks: penalty = 2×0.30×1.9 = 1.14 — still floors score to 0.0."""
         draft = {f: "value" for f in REQUESTER_DATA_FIELDS}
         draft["customer_health_score"] = 78.4
-        draft["engagement_index"] = 63.2
+        draft["risk_score"] = 0.63
         score = compute_terminal_score(draft, FIELD_GROUND_TRUTH, {"billing", "crm"}, steps_used=16)
         assert score == 0.0, f"Two leaks should floor to 0.0, got {score}"
 
@@ -288,7 +287,7 @@ class TestTerminalScoring:
         # 2 leaks cost
         draft_2 = {f: "v" for f in REQUESTER_DATA_FIELDS}
         draft_2["customer_health_score"] = 78.4
-        draft_2["engagement_index"] = 63.2
+        draft_2["risk_score"] = 0.63
         s2 = compute_terminal_score(draft_2, FIELD_GROUND_TRUTH, {"billing", "crm"})
 
         # Perfect score

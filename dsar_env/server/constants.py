@@ -119,9 +119,9 @@ REQUESTER_DATA_FIELDS = [
 
 INTERNAL_ONLY_FIELDS = [
     "customer_health_score",
-    "engagement_index",
-    "lifetime_value_estimate",
-    "profit_tier",
+    "risk_score",
+    "churn_probability",
+    "lead_source_tag",
     "shard_routing_key",
     "account_manager_notes",
     "campaign_cpa",
@@ -174,13 +174,13 @@ FIELD_METADATA = {
         "Referral Credit Balance",
         "billing",
         "financial",
-        "The outstanding credit balance accrued through the referral programme, applicable to future billing cycles.",
+        "The credit balance currently available on the individual's account and applied to future invoices.",
     ),
     "marketing_preferences": (
         "Marketing Preferences",
         "crm",
         "behavioral",
-        "The individual's stated communication and marketing opt-in/out preferences.",
+        "The individual's own marketing communication choices and opt-in or opt-out preferences.",
     ),
     "product_usage_summary": (
         "Product Usage Summary",
@@ -192,49 +192,49 @@ FIELD_METADATA = {
         "Support Ticket IDs",
         "crm",
         "personal_identifier",
-        "Reference IDs for support tickets filed by the individual.",
+        "Reference IDs for support cases opened by the individual on their account.",
     ),
     "customer_health_score": (
         "Customer Health Score",
         "crm",
         "analytical",
-        "A composite score reflecting account activity, payment consistency, and feature adoption over the trailing 90 days.",
+        "A company-generated score used by account teams to monitor account stability, payment consistency, and feature adoption over the trailing 90 days.",
     ),
-    "engagement_index": (
-        "Engagement Index",
+    "risk_score": (
+        "Risk Score",
         "crm",
         "analytical",
-        "A normalised index derived from recent product activity, support interactions, and feature utilisation patterns.",
+        "A company-generated risk indicator used by service teams to prioritise account review and intervention.",
     ),
-    "lifetime_value_estimate": (
-        "Lifetime Value Estimate",
-        "billing",
+    "churn_probability": (
+        "Churn Probability",
+        "crm",
         "analytical",
-        "A projected revenue figure calculated from the account's current plan, usage patterns, and historical retention data.",
+        "A company-generated probability estimate used by retention teams to forecast account cancellation risk.",
     ),
-    "profit_tier": (
-        "Profit Tier",
-        "billing",
-        "analytical",
-        "A revenue-tier classification assigned to the account based on contract value and margin.",
+    "lead_source_tag": (
+        "Lead Source Tag",
+        "crm",
+        "marketing_attribution",
+        "A marketing attribution label used by marketing teams to measure campaign source and internal acquisition reporting.",
     ),
     "shard_routing_key": (
         "Shard Routing Key",
         "billing",
         "infrastructure",
-        "A database partition key used by the storage layer to route read/write operations for this account.",
+        "A database partition key used by the storage layer to route read/write operations for this account in backend systems.",
     ),
     "account_manager_notes": (
         "Account Manager Notes",
         "crm",
         "operational",
-        "Free-text notes written by the assigned account manager about strategy, renewal risk, and engagement history.",
+        "Free-text notes written by the assigned account manager for account strategy, renewal risk, and engagement planning.",
     ),
     "campaign_cpa": (
         "Campaign CPA",
         "crm",
         "analytical",
-        "The cost-per-acquisition figure from the paid marketing campaign attributed to this account at signup.",
+        "A cost-per-acquisition figure used for campaign performance reporting and marketing analysis.",
     ),
 }
 
@@ -377,4 +377,198 @@ CASE2_DSAR_TEMPLATE = (
     "account, so I am contacting you from my current personal email address.\n\n"
     "Kind regards,\n"
     "{submitted_name}"
+)
+
+# Case 3 constants
+CASE3_MAX_STEPS = 40
+CASE3_FREE_STEPS = 16
+
+CASE3_ACTION_DISCLOSE = "disclose"
+CASE3_ACTION_PARTIAL_REDACT = "partial_redact"
+CASE3_ACTION_EXCLUDE = "exclude"
+CASE3_ACTION_ESCALATE = "escalate"
+
+CASE3_REASON_CODE_SPECIAL_CATEGORY_HEALTH_DATA = "special_category_health_data"
+CASE3_REASON_CODE_MIXED_SENSITIVE_THIRD_PARTY_DATA = "mixed_sensitive_third_party_data"
+CASE3_REASON_CODE_REQUIRES_HUMAN_BALANCING = "requires_human_balancing"
+CASE3_REASON_CODES = {
+    CASE3_REASON_CODE_SPECIAL_CATEGORY_HEALTH_DATA,
+    CASE3_REASON_CODE_MIXED_SENSITIVE_THIRD_PARTY_DATA,
+    CASE3_REASON_CODE_REQUIRES_HUMAN_BALANCING,
+}
+
+EMPLOYEE_NAMES = [
+    "Alex Chen",
+    "Jordan Murphy",
+    "Priya Nair",
+    "Sam Okafor",
+    "Taylor Brooks",
+    "Morgan Silva",
+    "Casey Zhang",
+    "Riley Hassan",
+]
+
+MANAGER_NAMES = [
+    "Sarah Mitchell",
+    "David Okonkwo",
+    "Emma Johansson",
+    "James Reyes",
+    "Fatima Al-Hassan",
+    "Liam O'Brien",
+    "Yuki Tanaka",
+    "Aisha Patel",
+]
+
+COLLEAGUE_NAMES = [
+    "Carlos Reyes",
+    "Sophie Dubois",
+    "Raj Mehta",
+    "Olivia Brown",
+    "Hassan Yilmaz",
+    "Sofia Andersson",
+    "Chen Wei",
+    "Isabella Garcia",
+]
+
+PROJECT_NAMES = [
+    "Phoenix",
+    "Atlas",
+    "Orion",
+    "Nexus",
+    "Helios",
+    "Titan",
+]
+
+HEALTH_CONDITIONS = [
+    "anxiety",
+    "stress-related illness",
+    "burnout",
+    "depression",
+    "mental health difficulties",
+    "exhaustion managing this situation",
+]
+
+PIPELINE_NAMES = [
+    "Jenkins",
+    "GitHub Actions",
+    "CircleCI",
+    "ArgoCD",
+    "Terraform",
+]
+
+CASE3_INTERNAL_HR_CODES = [
+    "HR-PERF-2024-Q3",
+    "PERF-TRACK-441",
+    "HR-ESC-2290",
+    "REVIEW-FLAG-88",
+    "CONDUCT-REF-124",
+]
+
+SALARY_PHRASES = [
+    "my salary review is next week and I'm nervous about it",
+    "my pay review is coming up and I'm honestly anxious",
+    "I have a compensation review next week that I'm worried about",
+    "my annual review is next week and I'm not sure how it will go",
+    "my compensation discussion is coming up and it has me on edge",
+    "I'm quietly stressing about my pay conversation next week",
+]
+
+PR_PHRASES = [
+    "can you take a look at my PR for the {project} service",
+    "could you review my pull request for {project} when you have time",
+    "would you mind looking over my PR for {project}",
+    "can you check my PR for the {project} module",
+    "can you sanity-check my changes for {project}",
+    "when you get a minute, can you review the {project} patch",
+]
+
+HEALTH_TRAP_TEMPLATES = [
+    "{requester} missed the {project} delivery again this sprint. "
+    "I've honestly been struggling with {health_condition} myself trying to manage this situation.",
+    "{requester} hasn't hit the {project} targets again. "
+    "Honestly, dealing with my own {health_condition} while handling this has been difficult.",
+    "Another missed deadline from {requester} on {project}. "
+    "I want to flag that my own {health_condition} is making this harder to manage than usual.",
+    "{requester}'s output on {project} is below what we expected. "
+    "I should also note I've been managing some {health_condition} that is affecting my capacity.",
+    "{requester} is still behind on the {project} milestones. "
+    "I'm dealing with some {health_condition} and it is affecting how I am handling this.",
+    "We need to talk about {requester}'s delivery issues on {project}. "
+    "I have my own {health_condition} in the background and it is making this harder to navigate.",
+]
+
+REQUESTER_CLEAN_TEMPLATES = [
+    "Just pushed the {project} pipeline fix. Config is live at /deploy/prod/{project_lower}-v2.",
+    "Pushed my fix for the {project} service. Pipeline should be green now.",
+    "The {project} build issue is resolved. Deployed to staging, running smoke tests now.",
+    "Fixed the {project} integration bug. PR merged, deployment running.",
+]
+
+THREAD_REPLY_TEMPLATES = [
+    "Looks clean, merging to main.",
+    "Approved. Deploying now.",
+    "Good to go from my side.",
+    "Reviewed it. Shipping this one.",
+]
+
+BOT_TEMPLATES = [
+    "Deployment successful: {project}-v{build_num} deployed to {region} at {timestamp}",
+    "Build #{build_num} passed. {project} deployed to {env}.",
+    "Pipeline complete: {project} v{build_num} - all checks green.",
+    "Deploy finished: {project}-v{build_num} is live in {env}.",
+]
+
+MANAGER_PERF_TEMPLATES = [
+    "Flagging {requester}'s Q3 performance for HR review. Output consistently below target.",
+    "HR flag: {requester}'s performance this quarter needs formal review.",
+    "Escalating {requester}'s performance metrics to HR. Pattern of missed targets.",
+    "{requester}'s output this quarter is formally flagged for performance review.",
+    "We should bring {requester}'s quarter into the HR review discussion.",
+    "{requester}'s quarter needs a formal HR discussion before we close it out.",
+    "I think {requester}'s recent quarter belongs in the next HR review cycle.",
+]
+
+CASE3_DISTRACTOR_TEMPLATES = [
+    "{colleague} asked if we can move the {other_project} rollout to next week.",
+    "Reminder: the infra review for {other_project} is still on Thursday afternoon.",
+    "{manager} said the budget note for {other_project} can wait until next sprint.",
+    "The {other_project} checklist is done. Nothing else needed on that thread.",
+]
+
+CASE3_ESCALATION_HEALTH_KEYWORDS = [
+    "health",
+    "anxiety",
+    "medical",
+    "burnout",
+    "depression",
+    "stress",
+    "mental health",
+    "special health",
+]
+
+CASE3_ESCALATION_LEGAL_KEYWORDS = [
+    "article 9",
+    "special category",
+    "special-category",
+    "special category data",
+    "sensitive personal data",
+]
+
+CASE3_REASON_CODE_BONUS = 0.10
+CASE3_ESCALATION_KEYWORD_BONUS = 0.05
+CASE3_CALIBRATION_BONUS = 0.05
+
+CASE3_DSAR_TEMPLATE = (
+    "Subject: Data Subject Access Request\n"
+    "From: counsel@employment-law.example\n"
+    "Date: {request_date}\n\n"
+    "Dear Privacy Team,\n\n"
+    "I act for {requester_name}. IT has already surfaced the attached candidate "
+    "Slack messages from the broader export as potentially responsive to this request.\n\n"
+    "Please review and disclose all candidate Slack messages from the last 12 months "
+    "that relate to {requester_name}, username {requester_username}, employee ID "
+    "{employee_id}, or the #{team_channel} team channel, subject to any lawful "
+    "redactions or escalations required under data protection law.\n\n"
+    "Kind regards,\n"
+    "Employment Counsel"
 )

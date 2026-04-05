@@ -10,8 +10,8 @@ polish and promote into the main submission-facing README.
 
 - `task_easy` is fully implemented and tested.
 - `task_medium` is now implemented as a two-phase identity verification plus support-ticket redaction task.
-- `task_hard` is scaffolded only and currently falls back to the Case 1 generator.
-- `inference.py` defaults to `task_easy`, but can run medium as well via the `DSAR_TASKS` environment variable.
+- `task_hard` is now implemented as candidate-set Slack compliance triage with thread resolution, sentence-level redaction, bot exclusion, and calibrated escalation.
+- `inference.py` now supports all three tasks via the `DSAR_TASKS` environment variable and defaults to running all three.
 
 ## What Works Today
 
@@ -20,8 +20,10 @@ polish and promote into the main submission-facing README.
 - Root-level `Dockerfile`
 - Deterministic Case 1 generator and grader
 - Deterministic Case 2 generator and grader
+- Deterministic Case 3 Slack-triage generator and grader
 - Progressive field reveal through `query_silo`
 - Two-phase Case 2 flow with identity confidence and ticket redaction
+- Case 3 message-level triage with sentence-level Slack redaction and escalation reasons
 - Typed action and observation models
 - Baseline inference loop using an OpenAI-compatible client
 - Hugging Face router-style default configuration in `inference.py`
@@ -54,12 +56,16 @@ The grader combines:
 - Phase 2: review sentence-level ticket content with `redact_span`
 - Terminal score: `0.30 * identity_score + 0.70 * redaction_score`
 
+`task_hard` models Slack candidate-set compliance triage for a workplace-dispute DSAR:
+
+- Candidate Slack messages are already surfaced from the broader export
+- Agent must resolve aliased user IDs, follow `thread_ts`, redact mixed-ownership sentences, exclude bot output, and escalate special-category entanglement with a legally meaningful reason
+- Terminal score combines normalized message accuracy, sentence-redaction quality, and escalation quality with explicit privacy-breach penalties
+
 ## Important Honesty Notes
 
-- The repository is not yet fully submission-ready for a 3-task claim.
-- `task_medium` is real, but `task_hard` is still a planned task direction rather than a finished task.
-- Any document that describes all 3 tasks as fully implemented is currently ahead
-  of the code.
+- The repository now has real implementations for all 3 tasks.
+- Baseline score ranges should be re-measured end-to-end with the current environment dependencies before any final submission README claims exact numbers.
 
 ## Local Run
 
@@ -84,14 +90,14 @@ Optional reproducible run:
 EPISODE_SEED=42 python inference.py
 ```
 
-Run easy + medium together:
+Run all three tasks together:
 
 ```bash
-DSAR_TASKS=task_easy,task_medium python inference.py
+DSAR_TASKS=task_easy,task_medium,task_hard python inference.py
 ```
 
 ## Recommended Next Steps
 
-1. Implement a real `task_hard` generator, observation flow, and grading path.
-2. Expand `inference.py` default task selection once all required tasks are real.
-3. Replace the sample `README.md` with a final honest submission README.
+1. Re-measure end-to-end baseline scores for all three tasks in a fully provisioned environment.
+2. Align `inference.py` stdout with the exact hackathon logging contract if required for submission.
+3. Replace the sample `README.md` with a final submission README once deployment validation is complete.

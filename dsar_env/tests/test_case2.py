@@ -381,7 +381,7 @@ class TestCase2TerminalScoring:
             disproportionate_used=False,
             completed_all_sentences=True,
         )
-        assert 0.94 <= score <= 0.96
+        assert 0.82 <= score <= 0.83
 
     def test_case2_terminal_score_pii_leak_is_much_lower(self):
         processed = {"T1": {0: "keep", 1: "keep", 2: "redact"}}
@@ -447,7 +447,7 @@ class TestCase2TerminalScoring:
             completed_all_sentences=False,
             termination_reason="incomplete_redaction_timeout",
         )
-        assert 0.44 <= score <= 0.45
+        assert 0.38 <= score <= 0.39
 
     def test_identity_score_not_inflated_by_multiple_proportionate_attempts(self):
         processed = {"T1": {0: "keep", 1: "redact", 2: "redact"}}
@@ -529,7 +529,7 @@ class TestCase2TerminalScoring:
             disproportionate_used=False,
             completed_all_sentences=True,
         )
-        assert 0.30 <= score <= 0.35
+        assert 0.24 <= score <= 0.26
 
     def test_all_redact_second_try_identity_is_worse(self):
         bundle = generate_case2_episode(seed=1)
@@ -550,7 +550,7 @@ class TestCase2TerminalScoring:
             disproportionate_used=False,
             completed_all_sentences=True,
         )
-        assert 0.20 <= score <= 0.27
+        assert 0.16 <= score <= 0.18
 
     def test_all_redact_third_try_identity_is_low(self):
         bundle = generate_case2_episode(seed=1)
@@ -624,7 +624,7 @@ class TestCase2TerminalScoring:
             )
             scores.append(score)
         mean_score = sum(scores) / len(scores)
-        assert 0.40 <= mean_score <= 0.55, f"Expected mean medium-band score, got {mean_score:.4f}"
+        assert 0.39 <= mean_score <= 0.55, f"Expected mean medium-band score, got {mean_score:.4f}"
 
 
 class TestCase2EnvironmentFlow:

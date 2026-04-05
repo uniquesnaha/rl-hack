@@ -8,6 +8,8 @@ observations, hidden state, and grader ground truth remain in sync.
 from __future__ import annotations
 
 import random
+import re
+import os
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -17,6 +19,15 @@ from .constants import (
     BILLING_DISPUTE_REASONS,
     CANCELLATION_REASONS,
     CASE1_DSAR_TEMPLATE,
+    CASE3_ACTION_DISCLOSE,
+    CASE3_ACTION_ESCALATE,
+    CASE3_ACTION_EXCLUDE,
+    CASE3_ACTION_PARTIAL_REDACT,
+    CASE3_DSAR_TEMPLATE,
+    CASE3_DISTRACTOR_TEMPLATES,
+    CASE3_INTERNAL_HR_CODES,
+    BOT_TEMPLATES,
+    COLLEAGUE_NAMES,
     CASE2_DSAR_TEMPLATE,
     CASE2_PROPORTIONATE_METHODS,
     CASE2_SENTENCE_LABEL_INTERNAL,
@@ -24,19 +35,30 @@ from .constants import (
     CASE2_SENTENCE_LABEL_REQUESTER,
     CASE2_VERIFICATION_THRESHOLD,
     CITIES_WITH_POSTCODES,
+    EMPLOYEE_NAMES,
     EMAIL_DOMAINS,
     FIELD_GROUND_TRUTH,
     FIELD_METADATA,
+    HEALTH_CONDITIONS,
+    HEALTH_TRAP_TEMPLATES,
+    LEAD_SOURCE_TAGS,
+    MANAGER_NAMES,
+    MANAGER_PERF_TEMPLATES,
     MARKETING_PREFERENCES,
+    PIPELINE_NAMES,
     PRODUCT_NAMES,
-    PROFIT_TIERS,
+    PR_PHRASES,
+    PROJECT_NAMES,
     REFERRAL_CREDIT_BALANCES,
     REQUESTER_NAMES,
+    REQUESTER_CLEAN_TEMPLATES,
+    SALARY_PHRASES,
     SHARD_ROUTING_KEYS,
     SUBSCRIPTION_PLANS,
     SUPPORT_AGENT_NAMES,
     SUPPORT_PHONE_NUMBERS,
     TECH_SUPPORT_ISSUES,
+    THREAD_REPLY_TEMPLATES,
     WORK_EMAIL_DOMAINS,
 )
 
@@ -135,9 +157,9 @@ def _build_structured_case_values(
         "product_usage_summary": _make_usage_summary(rng),
         "support_ticket_ids": support_ticket_ids,
         "customer_health_score": round(rng.uniform(0.0, 100.0), 1),
-        "engagement_index": round(rng.uniform(0.0, 100.0), 1),
-        "lifetime_value_estimate": round(rng.uniform(150.0, 5000.0), 2),
-        "profit_tier": rng.choice(PROFIT_TIERS),
+        "risk_score": round(rng.uniform(0.0, 1.0), 2),
+        "churn_probability": round(rng.uniform(0.0, 1.0), 2),
+        "lead_source_tag": rng.choice(LEAD_SOURCE_TAGS),
         "shard_routing_key": rng.choice(SHARD_ROUTING_KEYS),
         "account_manager_notes": rng.choice(ACCOUNT_MANAGER_NOTES),
         "campaign_cpa": round(rng.uniform(8.0, 45.0), 2),
@@ -1241,4 +1263,307 @@ def generate_case2_episode(seed: Optional[int] = None) -> Dict[str, Any]:
         "identity_ambiguity": identity["identity_ambiguity"],
         "tickets": tickets,
         "ticket_ground_truth": ticket_ground_truth,
+    }
+
+
+def _case3_sentence_items(text: str) -> List[Dict[str, Any]]:
+    parts = [part.strip() for part in re.split(r"(?<=[.!?])\s+", text) if part.strip()]
+    return [{"sentence_idx": idx, "text": part} for idx, part in enumerate(parts)]
+
+
+def _random_slack_user_id(rng: random.Random) -> str:
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    return "U" + "".join(rng.choice(alphabet) for _ in range(8))
+
+
+def _unique_slack_user_ids(rng: random.Random, count: int = 4) -> List[str]:
+    ids: List[str] = []
+    while len(ids) < count:
+        candidate = _random_slack_user_id(rng)
+        if candidate not in ids:
+            ids.append(candidate)
+    return ids
+
+
+def _build_slack_message(
+    msg_id: str,
+    user_id: str,
+    text: str,
+    ts: str,
+    *,
+    thread_ts: Optional[str] = None,
+    subtype: Optional[str] = None,
+) -> Dict[str, Any]:
+    msg = {
+        "msg_id": msg_id,
+        "user": user_id,
+        "text": text,
+        "ts": ts,
+        "sentences": _case3_sentence_items(text),
+    }
+    if thread_ts is not None:
+        msg["thread_ts"] = thread_ts
+    if subtype is not None:
+        msg["subtype"] = subtype
+    return msg
+
+
+def _random_case3_message_id(rng: random.Random) -> str:
+    alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+    return "msg_" + "".join(rng.choice(alphabet) for _ in range(10))
+
+
+def _generate_case3_users_json(
+    requester_name: str,
+    manager_name: str,
+    colleague_name: str,
+    rng: random.Random,
+) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, str]]:
+    bot_name = f"{rng.choice(PIPELINE_NAMES)}Bot"
+    role_names = {
+        "requester": requester_name,
+        "manager": manager_name,
+        "colleague": colleague_name,
+        "bot": bot_name,
+    }
+    user_ids = _unique_slack_user_ids(rng, count=4)
+    rng.shuffle(user_ids)
+    role_to_user_id = {
+        role: user_id for role, user_id in zip(role_names.keys(), user_ids)
+    }
+
+    users_json: Dict[str, Dict[str, Any]] = {}
+    for role, user_id in role_to_user_id.items():
+        name = role_names[role]
+        users_json[user_id] = {
+            "real_name": name,
+            "display_name": name.split()[0].lower(),
+        }
+        if role == "bot":
+            users_json[user_id]["is_bot"] = True
+    return users_json, role_to_user_id
+
+
+def _generate_case3_timestamps(rng: random.Random) -> Dict[str, str]:
+    base_ts = 1700000000 + rng.randint(0, 100000)
+    clean_offset = rng.randint(10, 120)
+    thread_offset = clean_offset + rng.randint(11, 90)
+
+    used_offsets = {clean_offset, thread_offset}
+    other_keys = ["health", "mixed", "bot", "perf"]
+    offsets: Dict[str, int] = {"clean": clean_offset, "thread": thread_offset}
+    for key in other_keys:
+        offset = rng.randint(1, 420)
+        while offset in used_offsets:
+            offset = rng.randint(1, 420)
+        used_offsets.add(offset)
+        offsets[key] = offset
+
+    return {key: str(base_ts + offset) for key, offset in offsets.items()}
+
+
+def _case3_distractor_count() -> int:
+    raw = os.environ.get("DSAR_CASE3_DISTRACTORS", "").strip()
+    if not raw:
+        return 0
+    try:
+        return max(0, min(4, int(raw)))
+    except ValueError:
+        return 0
+
+
+def generate_case3_episode(seed: Optional[int] = None) -> Dict[str, Any]:
+    rng = random.Random(seed)
+
+    requester_name = rng.choice(EMPLOYEE_NAMES)
+    manager_name = rng.choice(MANAGER_NAMES)
+    colleague_name = rng.choice(COLLEAGUE_NAMES)
+    project = rng.choice(PROJECT_NAMES)
+    project_lower = project.lower()
+    health_condition = rng.choice(HEALTH_CONDITIONS)
+    build_num = rng.randint(1000, 9999)
+    env = rng.choice(["eu-west-2", "us-east-1", "ap-southeast-1"])
+    requester_first = requester_name.split()[0]
+    request_date = _make_request_date(rng)
+    employee_id = f"EMP-{rng.randint(1000, 9999)}"
+    team_channel = f"{project_lower}-team"
+    other_project = rng.choice([candidate for candidate in PROJECT_NAMES if candidate != project])
+    users_json, role_to_user_id = _generate_case3_users_json(
+        requester_name=requester_name,
+        manager_name=manager_name,
+        colleague_name=colleague_name,
+        rng=rng,
+    )
+    timestamps = _generate_case3_timestamps(rng)
+
+    health_text = rng.choice(HEALTH_TRAP_TEMPLATES).format(
+        requester=requester_first,
+        project=project,
+        health_condition=health_condition,
+    )
+    clean_text = rng.choice(REQUESTER_CLEAN_TEMPLATES).format(
+        project=project,
+        project_lower=project_lower,
+    )
+    pr_phrase = rng.choice(PR_PHRASES).format(project=project)
+    salary_phrase = rng.choice(SALARY_PHRASES)
+    mixed_text = f"Hey {requester_first}, {pr_phrase}? Also, {salary_phrase}."
+    thread_text = rng.choice(THREAD_REPLY_TEMPLATES)
+    bot_text = rng.choice(BOT_TEMPLATES).format(
+        project=project,
+        build_num=build_num,
+        region=env,
+        env=env,
+        timestamp=timestamps["bot"],
+    )
+    perf_text = (
+        rng.choice(MANAGER_PERF_TEMPLATES).format(requester=requester_first)
+        + f" Ref {rng.choice(CASE3_INTERNAL_HR_CODES)}."
+    )
+
+    msg_ids = {
+        "health": _random_case3_message_id(rng),
+        "clean": _random_case3_message_id(rng),
+        "mixed": _random_case3_message_id(rng),
+        "thread": _random_case3_message_id(rng),
+        "bot": _random_case3_message_id(rng),
+        "perf": _random_case3_message_id(rng),
+    }
+    while len(set(msg_ids.values())) < len(msg_ids):
+        for key, value in list(msg_ids.items()):
+            if list(msg_ids.values()).count(value) > 1:
+                msg_ids[key] = _random_case3_message_id(rng)
+
+    messages = [
+        _build_slack_message(
+            msg_ids["health"],
+            role_to_user_id["manager"],
+            health_text,
+            timestamps["health"],
+        ),
+        _build_slack_message(
+            msg_ids["clean"],
+            role_to_user_id["requester"],
+            clean_text,
+            timestamps["clean"],
+        ),
+        _build_slack_message(
+            msg_ids["mixed"],
+            role_to_user_id["colleague"],
+            mixed_text,
+            timestamps["mixed"],
+        ),
+        _build_slack_message(
+            msg_ids["thread"],
+            role_to_user_id["manager"],
+            thread_text,
+            timestamps["thread"],
+            thread_ts=timestamps["clean"],
+        ),
+        _build_slack_message(
+            msg_ids["bot"],
+            role_to_user_id["bot"],
+            bot_text,
+            timestamps["bot"],
+            subtype="bot_message",
+        ),
+        _build_slack_message(
+            msg_ids["perf"],
+            role_to_user_id["manager"],
+            perf_text,
+            timestamps["perf"],
+        ),
+    ]
+    distractor_count = _case3_distractor_count()
+    for index in range(distractor_count):
+        distractor_id = _random_case3_message_id(rng)
+        while distractor_id in msg_ids.values():
+            distractor_id = _random_case3_message_id(rng)
+        distractor_text = rng.choice(CASE3_DISTRACTOR_TEMPLATES).format(
+            colleague=colleague_name.split()[0],
+            manager=manager_name.split()[0],
+            other_project=other_project,
+        )
+        distractor_user = rng.choice(
+            [role_to_user_id["manager"], role_to_user_id["colleague"]]
+        )
+        distractor_ts = str(int(max(timestamps.values(), key=int)) + 50 + index * 17)
+        messages.append(
+            _build_slack_message(
+                distractor_id,
+                distractor_user,
+                distractor_text,
+                distractor_ts,
+            )
+        )
+    rng.shuffle(messages)
+
+    ground_truth = {
+        msg_ids["health"]: {
+            "action": CASE3_ACTION_ESCALATE,
+            "is_special_category": True,
+            "sentence_ground_truth": None,
+        },
+        msg_ids["clean"]: {
+            "action": CASE3_ACTION_DISCLOSE,
+            "is_special_category": False,
+            "sentence_ground_truth": None,
+        },
+        msg_ids["mixed"]: {
+            "action": CASE3_ACTION_PARTIAL_REDACT,
+            "is_special_category": False,
+            "sentence_ground_truth": {
+                0: CASE2_SENTENCE_LABEL_REQUESTER,
+                1: CASE2_SENTENCE_LABEL_PII,
+            },
+            "kept_sentence_idx": 0,
+            "redacted_sentence_idx": 1,
+        },
+        msg_ids["thread"]: {
+            "action": CASE3_ACTION_DISCLOSE,
+            "is_special_category": False,
+            "thread_parent_id": msg_ids["clean"],
+            "sentence_ground_truth": None,
+        },
+        msg_ids["bot"]: {
+            "action": CASE3_ACTION_EXCLUDE,
+            "is_special_category": False,
+            "sentence_ground_truth": None,
+        },
+        msg_ids["perf"]: {
+            "action": CASE3_ACTION_DISCLOSE,
+            "is_special_category": False,
+            "sentence_ground_truth": None,
+        },
+    }
+    for message in messages:
+        if message["msg_id"] not in ground_truth:
+            ground_truth[message["msg_id"]] = {
+                "action": CASE3_ACTION_EXCLUDE,
+                "is_special_category": False,
+                "sentence_ground_truth": None,
+            }
+
+    dsar_text = CASE3_DSAR_TEMPLATE.format(
+        request_date=request_date,
+        requester_name=requester_name,
+        requester_username=requester_first.lower(),
+        employee_id=employee_id,
+        team_channel=team_channel,
+    )
+
+    return {
+        "messages": messages,
+        "users_json": users_json,
+        "ground_truth": ground_truth,
+        "dsar_text": dsar_text,
+        "requester_user_id": role_to_user_id["requester"],
+        "requester_name": requester_name,
+        "special_category_message_ids": [msg_ids["health"]],
+        "thread_parent_id": msg_ids["clean"],
+        "thread_reply_id": msg_ids["thread"],
+        "bot_message_id": msg_ids["bot"],
+        "mixed_sentence_message_id": msg_ids["mixed"],
+        "employee_id": employee_id,
+        "team_channel": team_channel,
     }
