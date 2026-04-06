@@ -31,6 +31,9 @@ import re
 import sys
 import time
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from openai import OpenAI
 
 
@@ -93,6 +96,11 @@ MULTI_SEED_VALUES = [
     for seed in os.environ.get("DSAR_MULTI_SEED", "").split(",")
     if seed.strip()
 ]
+TASK_SEEDS = {}
+for item in os.environ.get("DSAR_TASK_SEEDS", "").split(","):
+    if ":" in item:
+        k, v = item.split(":")
+        TASK_SEEDS[k.strip()] = _parse_optional_int(v.strip())
 
 # OpenAI-compatible client pointing at the configured LLM provider.
 def _select_api_key(base_url: str) -> str:

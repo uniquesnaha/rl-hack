@@ -1,3 +1,11 @@
+---
+title: DSAR Env
+emoji: 🛡️
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 8000
+---
 # DSAR-OpenEnv: GDPR Data Subject Access Request Compliance Environment
 
 A reinforcement learning environment for training AI agents to process **Data Subject Access Requests (DSARs)** under GDPR/UK GDPR compliance. Built on the [OpenEnv](https://github.com/meta-pytorch/OpenEnv) framework.
