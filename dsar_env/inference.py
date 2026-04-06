@@ -30,11 +30,30 @@ import os
 import re
 import sys
 import time
+from typing import Optional, List
 
 from dotenv import load_dotenv
 load_dotenv()
 
 from openai import OpenAI
+
+
+def log_start(task: str, env: str, model: str) -> None:
+    print(f"[START] task={task} env={env} model={model}", flush=True)
+
+
+def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
+    error_val = error if error else "null"
+    done_val = str(done).lower()
+    print(
+        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
+        flush=True,
+    )
+
+
+def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}", flush=True)
 
 
 def _parse_optional_int(raw_value: str | None) -> int | None:
@@ -74,40 +93,33 @@ def _parse_task_seed_map(raw_value: str | None) -> dict[str, int]:
 # Configuration
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct:fastest")
-HF_TOKEN = os.environ.get("HF_TOKEN", "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")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-TEMPERATURE = 0.0  # keep deterministic when a fixed seed is provided
+HF_TOKEN = os.environ.get("HF_TOKEN", "")
+
+# The following variables are explicitly hardcoded for evaluation consistency
+# and to avoid side-effects from missing entries in local or grader .env files.
+TEMPERATURE = 0.0  # keep deterministic
 MAX_TOKENS = 512
 MAX_STEPS = 30
-EPISODE_SEED = _parse_optional_int(os.environ.get("EPISODE_SEED"))
-TASK_SEED_MAP = _parse_task_seed_map(os.environ.get("DSAR_TASK_SEEDS"))
-TASK_IDS = [task.strip() for task in os.environ.get("DSAR_TASKS", "task_easy,task_medium,task_hard").split(",") if task.strip()]
-TRACE_ENABLED = os.environ.get("DSAR_TRACE", "").strip().lower() in {"1", "true", "yes", "on"}
-INFERENCE_MODE = os.environ.get("DSAR_INFERENCE_MODE", "raw").strip().lower()
-CASE3_HEURISTIC_REQUESTED = (
-    os.environ.get("DSAR_DEBUG_CASE3_HEURISTIC", os.environ.get("DSAR_USE_CASE3_HEURISTIC", ""))
-    .strip()
-    .lower()
-    in {"1", "true", "yes", "on"}
-)
-CASE3_HEURISTIC_ENABLED = INFERENCE_MODE == "debug" and CASE3_HEURISTIC_REQUESTED
-MULTI_SEED_VALUES = [
-    seed.strip()
-    for seed in os.environ.get("DSAR_MULTI_SEED", "").split(",")
-    if seed.strip()
-]
-TASK_SEEDS = {}
-for item in os.environ.get("DSAR_TASK_SEEDS", "").split(","):
-    if ":" in item:
-        k, v = item.split(":")
-        TASK_SEEDS[k.strip()] = _parse_optional_int(v.strip())
+EPISODE_SEED = None
+TASK_SEED_MAP = {
+    "task_easy": 7,
+    "task_medium": 3,
+    "task_hard": 31
+}
+TASK_IDS = ["task_easy", "task_medium", "task_hard"]
+TRACE_ENABLED = True
+INFERENCE_MODE = "raw"
+CASE3_HEURISTIC_REQUESTED = False
+CASE3_HEURISTIC_ENABLED = False
+MULTI_SEED_VALUES = []
+TASK_SEEDS = TASK_SEED_MAP.copy()
 
 # OpenAI-compatible client pointing at the configured LLM provider.
 def _select_api_key(base_url: str) -> str:
     lowered = base_url.lower()
     if "huggingface.co" in lowered:
         return HF_TOKEN
-    return OPENAI_API_KEY or HF_TOKEN
+    return os.environ.get("OPENAI_API_KEY", "") or HF_TOKEN
 
 
 client = OpenAI(
@@ -907,6 +919,9 @@ def run_episode(env_url: str, task_id: str, episode_seed: int | None = None) -> 
     total_reward = 0.0
     final_score = 0.0
     terminal_metrics: dict = {}
+    rewards_list: List[float] = []
+
+    log_start(task=task_id, env="dsar", model=MODEL_NAME)
 
     for step in range(1, episode_max_steps + 1):
         if done:
@@ -1037,11 +1052,14 @@ def run_episode(env_url: str, task_id: str, episode_seed: int | None = None) -> 
         reward = step_data.get("reward", observation.get("reward", 0.0)) or 0.0
         done = step_data.get("done", observation.get("done", False))
         total_reward += reward
+        rewards_list.append(reward)
 
         error_flag = f" ERROR: {observation.get('error')}" if observation.get("error") else ""
         history.append(f"Step {step}: {action_str} -> reward {reward:+.4f}{error_flag}")
         print(f"    Reward: {reward:+.4f} | Done: {done}{error_flag}")
         trace("UPDATED OBSERVATION", observation)
+
+        log_step(step=step, action=action_str, reward=reward, done=done, error=observation.get("error"))
 
         if done:
             terminal_score = meta.get("terminal_score")
@@ -1060,6 +1078,9 @@ def run_episode(env_url: str, task_id: str, episode_seed: int | None = None) -> 
         print(f"  Reached max steps ({episode_max_steps}).")
         final_score = observation.get("metadata", {}).get("terminal_score", 0.0)
         terminal_metrics = _extract_terminal_metrics(observation.get("metadata", {}), observation)
+        step = episode_max_steps
+
+    log_end(success=(final_score >= 0.1), steps=step, score=final_score, rewards=rewards_list)
 
     return {
         "task_id": task_id,
