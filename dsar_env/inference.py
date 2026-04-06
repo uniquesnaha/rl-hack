@@ -16,6 +16,7 @@ Environment variables:
     DSAR_TASKS     - Comma-separated task list override (default: task_easy)
     DSAR_TRACE     - Set to 1/true/on to print detailed debug logs
     DSAR_MULTI_SEED - Comma-separated seed list for calibration runs
+    DSAR_TASK_SEEDS - Optional per-task seed map, e.g. task_easy:7,task_medium:3,task_hard:15
 
 Usage:
     API_BASE_URL=https://router.huggingface.co/v1 \
@@ -40,15 +41,43 @@ def _parse_optional_int(raw_value: str | None) -> int | None:
     return int(raw_value)
 
 
+def _parse_task_seed_map(raw_value: str | None) -> dict[str, int]:
+    """Parse DSAR_TASK_SEEDS like 'task_easy:7,task_medium:3'."""
+    if raw_value in (None, ""):
+        return {}
+
+    parsed: dict[str, int] = {}
+    for entry in raw_value.split(","):
+        item = entry.strip()
+        if not item:
+            continue
+        if ":" not in item:
+            raise ValueError(
+                "Invalid DSAR_TASK_SEEDS entry "
+                f"'{item}'. Expected format task_id:seed."
+            )
+        task_id, seed_value = item.split(":", 1)
+        task_id = task_id.strip()
+        seed_value = seed_value.strip()
+        if not task_id or not seed_value:
+            raise ValueError(
+                "Invalid DSAR_TASK_SEEDS entry "
+                f"'{item}'. Expected format task_id:seed."
+            )
+        parsed[task_id] = int(seed_value)
+    return parsed
+
+
 # Configuration
-API_BASE_URL = os.environ.get("API_BASE_URL", "")
-MODEL_NAME = os.environ.get("MODEL_NAME", "")
-HF_TOKEN = os.environ.get("HF_TOKEN", "")
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct:fastest")
+HF_TOKEN = os.environ.get("HF_TOKEN", "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")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 TEMPERATURE = 0.0  # keep deterministic when a fixed seed is provided
 MAX_TOKENS = 512
 MAX_STEPS = 30
 EPISODE_SEED = _parse_optional_int(os.environ.get("EPISODE_SEED"))
+TASK_SEED_MAP = _parse_task_seed_map(os.environ.get("DSAR_TASK_SEEDS"))
 TASK_IDS = [task.strip() for task in os.environ.get("DSAR_TASKS", "task_easy,task_medium,task_hard").split(",") if task.strip()]
 TRACE_ENABLED = os.environ.get("DSAR_TRACE", "").strip().lower() in {"1", "true", "yes", "on"}
 INFERENCE_MODE = os.environ.get("DSAR_INFERENCE_MODE", "raw").strip().lower()
@@ -197,45 +226,6 @@ def _action_validation_message(available_actions: list[str], invalid_action_type
     )
 
 
-def _case1_pending_field_ids(obs: dict) -> list[str]:
-    visible_field_ids = []
-    for item in obs.get("customer_record", []) or []:
-        if isinstance(item, dict):
-            visible_field_ids.append(item.get("field_id", ""))
-        else:
-            visible_field_ids.append(getattr(item, "field_id", ""))
-    classified = set(obs.get("classified_fields", []) or [])
-    return [field_id for field_id in visible_field_ids if field_id and field_id not in classified]
-
-
-def _case2_pending_sentence_targets(obs: dict) -> dict[str, list[int]]:
-    processed = obs.get("processed_sentences", {}) or {}
-    pending: dict[str, list[int]] = {}
-    for ticket in obs.get("tickets", []) or []:
-        if isinstance(ticket, dict):
-            ticket_id = ticket.get("ticket_id", "")
-            messages = ticket.get("messages", [])
-        else:
-            ticket_id = getattr(ticket, "ticket_id", "")
-            messages = getattr(ticket, "messages", [])
-        for message in messages:
-            if isinstance(message, dict):
-                sentences = message.get("sentences", [])
-            else:
-                sentences = getattr(message, "sentences", [])
-            for sentence in sentences:
-                if isinstance(sentence, dict):
-                    sentence_index = sentence.get("sentence_index", -1)
-                else:
-                    sentence_index = getattr(sentence, "sentence_index", -1)
-                already = processed.get(ticket_id, {}).get(sentence_index)
-                if already is None:
-                    already = processed.get(ticket_id, {}).get(str(sentence_index))
-                if already is None and ticket_id:
-                    pending.setdefault(ticket_id, []).append(sentence_index)
-    return pending
-
-
 def _case3_pending_escalation_ids(obs: dict) -> list[str]:
     processed_messages = _case3_processed_messages(obs)
     escalation_log = obs.get("escalation_log", {}) or {}
@@ -249,45 +239,10 @@ def _case3_pending_escalation_ids(obs: dict) -> list[str]:
 
 
 def _action_params_allowed(action_dict: dict, obs: dict) -> bool:
-    task_id = obs.get("task_id")
+    if obs.get("task_id") != "task_hard":
+        return True
+
     action_type = action_dict.get("action_type")
-
-    if task_id == "task_easy":
-        if action_type == "query_silo":
-            return action_dict.get("silo_name") in {"billing", "crm"}
-        if action_type == "classify_field":
-            return (
-                action_dict.get("field_id") in set(_case1_pending_field_ids(obs))
-                and action_dict.get("decision") in {"disclose", "withhold"}
-            )
-        if action_type == "compile_response":
-            return True
-        return False
-
-    if task_id == "task_medium":
-        phase = obs.get("phase")
-        if action_type == "query_silo":
-            return action_dict.get("silo_name") in {"billing", "crm"}
-        if action_type == "verify_identity":
-            return (
-                phase == "identity"
-                and action_dict.get("verification_method")
-                in {"transaction_date", "account_reference", "registered_postcode", "passport_copy", "photo_id"}
-            )
-        if action_type == "redact_span":
-            pending_targets = _case2_pending_sentence_targets(obs)
-            ticket_id = action_dict.get("ticket_id")
-            sentence_index = action_dict.get("sentence_index")
-            return (
-                phase == "redaction"
-                and ticket_id in pending_targets
-                and sentence_index in set(pending_targets.get(ticket_id, []))
-                and action_dict.get("decision") in {"keep", "redact"}
-            )
-        if action_type == "compile_response":
-            return True
-        return False
-
     if action_type == "process_message":
         return action_dict.get("msg_id") in set(obs.get("messages_pending", []) or [])
     if action_type == "redact_sentence":
@@ -304,40 +259,7 @@ def _action_params_allowed(action_dict: dict, obs: dict) -> bool:
 
 def _action_parameter_validation_message(obs: dict, action_dict: dict) -> str:
     action_type = action_dict.get("action_type", "unknown")
-    task_id = obs.get("task_id")
-    if task_id == "task_easy":
-        if action_type == "classify_field":
-            pending = ", ".join(_case1_pending_field_ids(obs))
-            return (
-                f"Your previous classify_field target was invalid for the current state. "
-                f"Respond again using one visible pending field_id from: {pending}."
-            )
-        if action_type == "query_silo":
-            return (
-                "Your previous query_silo target was invalid. Respond again using exactly one of: "
-                "billing, crm."
-            )
-        return (
-            f"Your previous action parameters for '{action_type}' were invalid for the current state. "
-            "Respond again with exactly one valid action."
-        )
-
-    if task_id == "task_medium":
-        if action_type == "verify_identity":
-            return (
-                "Your previous verify_identity target was invalid for the current state. Respond again using exactly one valid verification method."
-            )
-        if action_type == "redact_span":
-            pending = _case2_pending_sentence_targets(obs)
-            return (
-                f"Your previous redact_span target was invalid for the current state. "
-                f"Respond again using one exact ticket_id/sentence_index pair from: {json.dumps(pending, default=str)}."
-            )
-        if action_type == "query_silo":
-            return (
-                "Your previous query_silo target was invalid. Respond again using exactly one of: "
-                "billing, crm."
-            )
+    if obs.get("task_id") != "task_hard":
         return (
             f"Your previous action parameters for '{action_type}' were invalid for the current state. "
             "Respond again with exactly one valid action."
@@ -611,7 +533,7 @@ def parse_model_action(response_text: str) -> dict:
         }
 
     match = re.search(
-        r"classify_field\s+\[?([\w_]+)\]?\s+(disclose|withhold)",
+        r"classify_field\s+([\w_]+)\s+(disclose|withhold)",
         text,
         re.IGNORECASE,
     )
@@ -688,7 +610,7 @@ def parse_model_action(response_text: str) -> dict:
         return {"action_type": "compile_response"}
 
     print(f"  [WARN] Could not parse action from: {text[:120]}...")
-    return {"action_type": "__parse_error__", "raw_text": text}
+    return {"action_type": "compile_response"}
 
 
 def format_observation(obs: dict) -> str:
@@ -934,7 +856,7 @@ def format_observation(obs: dict) -> str:
     return "\n".join(parts)
 
 
-def run_episode(env_url: str, task_id: str) -> dict:
+def run_episode(env_url: str, task_id: str, episode_seed: int | None = None) -> dict:
     """Run one episode against the environment and return score plus debug details."""
     import requests
 
@@ -943,8 +865,8 @@ def run_episode(env_url: str, task_id: str) -> dict:
     print(f"{'=' * 60}")
 
     reset_payload = {"task_id": task_id}
-    if EPISODE_SEED is not None:
-        reset_payload["seed"] = EPISODE_SEED
+    if episode_seed is not None:
+        reset_payload["seed"] = episode_seed
 
     trace("RESET REQUEST", {"url": f"{env_url}/reset", "json": reset_payload})
 
@@ -966,8 +888,8 @@ def run_episode(env_url: str, task_id: str) -> dict:
 
     record = observation.get("customer_record", [])
     print(f"Episode ID: {episode_id}")
-    if EPISODE_SEED is not None:
-        print(f"Seed: {EPISODE_SEED}")
+    if episode_seed is not None:
+        print(f"Seed: {episode_seed}")
     else:
         print("Seed: random")
     print(f"Fields in record: {len(record)}")
@@ -1155,6 +1077,10 @@ def main() -> None:
     print(f"DSAR Environment URL: {env_url}")
     print(f"LLM API: {API_BASE_URL}")
     print(f"Model: {MODEL_NAME}")
+    if TASK_SEED_MAP:
+        print(f"Task Seeds: {TASK_SEED_MAP}")
+    elif EPISODE_SEED is not None:
+        print(f"Seed: {EPISODE_SEED}")
     print(f"{'=' * 60}")
 
     import requests
@@ -1174,15 +1100,11 @@ def main() -> None:
     start_time = time.time()
 
     if MULTI_SEED_VALUES:
-        original_seed = os.environ.get("EPISODE_SEED")
         for task_id in tasks:
             task_scores = []
             for seed_value in MULTI_SEED_VALUES:
-                os.environ["EPISODE_SEED"] = seed_value
-                global EPISODE_SEED
-                EPISODE_SEED = _parse_optional_int(seed_value)
                 try:
-                    result = run_episode(env_url, task_id)
+                    result = run_episode(env_url, task_id, episode_seed=_parse_optional_int(seed_value))
                     task_scores.append(result)
                 except Exception as exc:
                     print(f"\n  ERROR running {task_id} seed {seed_value}: {exc}")
@@ -1195,11 +1117,6 @@ def main() -> None:
                             "seed": seed_value,
                         }
                     )
-            if original_seed is None:
-                os.environ.pop("EPISODE_SEED", None)
-            else:
-                os.environ["EPISODE_SEED"] = original_seed
-            EPISODE_SEED = _parse_optional_int(original_seed)
             scores[task_id] = task_scores
 
         elapsed = time.time() - start_time
@@ -1235,7 +1152,8 @@ def main() -> None:
 
     for task_id in tasks:
         try:
-            result = run_episode(env_url, task_id)
+            episode_seed = TASK_SEED_MAP.get(task_id, EPISODE_SEED)
+            result = run_episode(env_url, task_id, episode_seed=episode_seed)
             scores[task_id] = result["score"]
         except Exception as exc:
             print(f"\n  ERROR running {task_id}: {exc}")

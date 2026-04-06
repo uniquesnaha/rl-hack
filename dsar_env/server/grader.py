@@ -757,6 +757,7 @@ def compute_terminal_score_case3(
         "c1_message_accuracy": 0.0,
         "c2_sentence_redaction": 0.0,
         "c3_escalation_quality": 0.0,
+        "calibration_penalty": 0.0,
         "n_pii_breaches": 0,
         "privacy_penalty": 0.0,
         "task3_score": 0.0,
@@ -807,9 +808,22 @@ def compute_terminal_score_case3(
         ground_truth,
         special_category_msg_ids[0],
     )
+    calibration_penalty = 0.0
+    for diagnostic in message_diagnostics.values():
+        expected = diagnostic.get("expected_action")
+        actual = diagnostic.get("actual_action")
+        if expected == CASE3_ACTION_DISCLOSE and actual == CASE3_ACTION_PARTIAL_REDACT:
+            calibration_penalty += 0.10
+        elif expected == CASE3_ACTION_DISCLOSE and actual == CASE3_ACTION_ESCALATE:
+            calibration_penalty += 0.10
+        elif expected == CASE3_ACTION_DISCLOSE and actual == CASE3_ACTION_EXCLUDE:
+            calibration_penalty += 0.12
+        elif expected == CASE3_ACTION_EXCLUDE and actual == CASE3_ACTION_DISCLOSE:
+            calibration_penalty += 0.14
+
     n_breaches = _count_pii_breaches_case3(agent_processed, ground_truth)
     privacy_penalty = n_breaches * 0.30 * (1.0 + n_breaches * 0.50)
-    raw = 0.40 * c1 + 0.30 * c2 + 0.30 * c3 - privacy_penalty
+    raw = 0.40 * c1 + 0.30 * c2 + 0.30 * c3 - privacy_penalty - calibration_penalty
     task3_score = max(0.0, min(1.0, raw))
 
     return {
@@ -817,6 +831,7 @@ def compute_terminal_score_case3(
         "c1_message_accuracy": c1,
         "c2_sentence_redaction": c2,
         "c3_escalation_quality": c3,
+        "calibration_penalty": round(calibration_penalty, 4),
         "n_pii_breaches": n_breaches,
         "privacy_penalty": round(privacy_penalty, 4),
         "task3_score": round(task3_score, 4),
