@@ -32,6 +32,7 @@ import os
 import re
 import sys
 import time
+from urllib.parse import urlparse
 from typing import Optional, List
 
 from dotenv import load_dotenv
@@ -90,6 +91,35 @@ def _parse_task_seed_map(raw_value: str | None) -> dict[str, int]:
             )
         parsed[task_id] = int(seed_value)
     return parsed
+
+
+def _normalize_env_url(raw_value: str | None) -> str:
+    """Normalize DSAR_ENV_URL into a usable HTTP base URL."""
+    if raw_value in (None, ""):
+        return "https://snaha1911-dsar-env.hf.space"
+
+    env_url = raw_value.strip()
+    if not env_url:
+        return "https://snaha1911-dsar-env.hf.space"
+
+    if "://" not in env_url:
+        env_url = f"https://{env_url}"
+
+    parsed = urlparse(env_url)
+    if parsed.netloc == "huggingface.co":
+        path_parts = [part for part in parsed.path.strip("/").split("/") if part]
+        if len(path_parts) >= 3 and path_parts[0] == "spaces":
+            owner = path_parts[1]
+            space_name = path_parts[2]
+            return f"https://{owner}-{space_name}.hf.space"
+
+    if parsed.netloc.endswith(".hf.space") and parsed.scheme in {"http", "https"}:
+        return f"{parsed.scheme}://{parsed.netloc}"
+
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}"
+
+    return env_url.rstrip("/")
 
 
 # Configuration
@@ -1082,7 +1112,9 @@ def run_episode(env_url: str, task_id: str, episode_seed: int | None = None) -> 
 
 def main() -> None:
     """Run baseline inference across the currently implemented task set."""
-    env_url = os.environ.get("DSAR_ENV_URL", "huggingface.co/spaces/snaha1911/dsar-env")
+    env_url = _normalize_env_url(
+        os.environ.get("DSAR_ENV_URL", "https://snaha1911-dsar-env.hf.space")
+    )
     if INFERENCE_MODE not in {"raw", "debug"}:
         print(
             f"ERROR: Unsupported DSAR_INFERENCE_MODE '{INFERENCE_MODE}'. Use raw or debug.",
