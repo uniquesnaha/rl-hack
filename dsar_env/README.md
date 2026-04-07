@@ -1,192 +1,309 @@
 ---
 title: DSAR Env
-emoji: 🛡️
+emoji: shield
 colorFrom: blue
 colorTo: indigo
 sdk: docker
 app_port: 8000
 ---
-# DSAR-OpenEnv: GDPR Data Subject Access Request Compliance Environment
 
-A reinforcement learning environment for training AI agents to process **Data Subject Access Requests (DSARs)** under GDPR/UK GDPR compliance. Built on the [OpenEnv](https://github.com/meta-pytorch/OpenEnv) framework.
+# DSAR-OpenEnv: Privacy Compliance RL Environment
 
-## Motivation
+DSAR-OpenEnv is a real-world OpenEnv benchmark for **Data Subject Access Request (DSAR)** handling under GDPR / UK GDPR style privacy operations. It is designed for training and evaluating agents on a workflow that compliance, legal operations, privacy engineering, and support teams actually perform: deciding what data to disclose, what to withhold, when to verify identity, how to redact third-party data, and when to escalate high-risk material.
 
-Data Subject Access Requests are **legally mandated** under GDPR Article 15 in 30+ countries. Every organisation that processes personal data must respond within 30 days.
+This is not a toy workflow. The environment models practical compliance work where the agent must balance:
 
-- **Cost**: Manual DSAR processing costs **$1,500+ per request** ([source](https://secureprivacy.ai))
-- **Volume**: DSAR volumes are growing **43% year-over-year** as data awareness increases
-- **Risk**: Incorrect handling leads to regulatory fines (up to 4% of global revenue) and legal liability
-- **Complexity**: Each DSAR requires classifying dozens of data fields as personal data (must disclose) vs internal business data (must withhold), verifying requester identity, and redacting third-party information
+- requester access rights
+- internal-only operational data
+- third-party privacy protection
+- special-category escalation
+- deadline pressure and completion discipline
 
-This environment trains RL agents to automate the most operationally complex parts of DSAR compliance.
+## Why This Environment Matters
+
+DSAR handling is a strong RL benchmark domain because it combines:
+
+- structured data access decisions
+- partial observability
+- sequential workflow gates
+- asymmetric costs for privacy mistakes
+- realistic catastrophic failure modes
+
+The environment is useful both as a benchmark and as a training curriculum for privacy/compliance agents.
 
 ## Tasks
 
-| Task | Difficulty | Description | Baseline LLM Score |
-|------|-----------|-------------|-------------------|
-| `task_easy` | Easy | Clean consumer request — classify 17 fields as personal vs internal data | 0.45–0.60 |
-| `task_medium` | Medium | Mismatched identity verification + support ticket redaction at sentence level | 0.45–0.55 |
-| `task_hard` | Hard | Candidate-set Slack DSAR triage with thread resolution, mixed ownership, and Article 9 escalation | Pending re-measurement |
+| Task | Difficulty | What the agent must do | Main skills tested |
+| --- | --- | --- | --- |
+| `task_easy` | Easy | Query billing + CRM silos and classify 17 customer fields as disclose vs withhold | field semantics, basic disclosure policy |
+| `task_medium` | Medium | Verify identity proportionately, then redact support tickets sentence by sentence | verification strategy, sentence-level privacy filtering |
+| `task_hard` | Hard | Triage six candidate Slack messages from a workplace-dispute DSAR | thread reasoning, mixed ownership, bot exclusion, escalation judgment |
 
-### Task 1: Clean Consumer Request (Easy)
+### Task 1: Consumer Record Classification
 
-A customer submits a straightforward DSAR. The agent receives a merged record with 17 fields from billing and CRM databases — 10 fields are personal data (name, email, payment history, referral credits, etc.) and 7 are internal business data (customer health score, engagement index, lifetime value estimate, infrastructure keys, etc.). The agent must classify each field correctly.
+The agent receives a straightforward customer DSAR and must inspect structured fields drawn from billing and CRM systems. Some fields are clearly requester-owned data; others are internal operational or analytical fields that should not be disclosed.
 
-**Skills tested**: Semantic understanding of data field types, distinguishing personal from operational data.
+Representative requester-owned fields include:
 
-### Task 2: Mismatched Identity + Support Tickets (Medium)
+- `full_name`
+- `email`
+- `billing_address`
+- `payment_history`
+- `support_ticket_ids`
+- `referral_credit_balance`
 
-A former customer submits a DSAR from a different email than their account. The agent must first verify identity through proportionate means (not requesting passport/photo ID), then process support ticket transcripts at sentence granularity, redacting staff PII while preserving the customer's content.
+Representative internal-only fields include:
 
-**Skills tested**: Identity verification proportionality, sentence-level PII detection, sequential decision-making.
+- `customer_health_score`
+- `risk_score`
+- `churn_probability`
+- `lead_source_tag`
+- `shard_routing_key`
+- `account_manager_notes`
+- `campaign_cpa`
 
-### Task 3: Weaponised Employee DSAR on Slack (Hard)
+### Task 2: Identity Verification + Ticket Redaction
 
-A former employee's lawyer submits a broad workplace-dispute DSAR. IT has already surfaced a candidate set of six potentially responsive Slack messages from the broader export. The agent must triage those candidate messages using a Slack JSON export with aliased user IDs, threaded replies, bot messages, and mixed-ownership sentences (requester data + colleague salary info in one message; manager performance feedback + manager health disclosure in another).
+The requester provides near-match identity details rather than a perfect account match. The agent must:
 
-**Skills tested**: User ID resolution, thread context tracking, Article 9 special-category escalation, sentence-level ownership splitting.
+1. query the relevant silos for masked evidence
+2. choose a **proportionate** verification method
+3. unlock the support-ticket corpus
+4. redact staff PII and internal-only content while preserving requester-owned text
+
+This task is designed as a sequential workflow rather than a one-shot classification problem.
+
+### Task 3: Slack DSAR Triage
+
+The hard task models a workplace-dispute DSAR where IT has already surfaced a six-message candidate set from a broader Slack export. The agent must decide, for each candidate message, whether to:
+
+- disclose it
+- send it to sentence-level redaction
+- exclude it
+- escalate it with a structured reason code and free-text justification
+
+The candidate set contains:
+
+- a requester-authored technical message that is still disclose-worthy
+- a mixed-ownership message requiring sentence-level splitting
+- a bot/system deployment message that should be excluded
+- a thread reply that depends on parent-message context
+- a requester-entitled HR/performance message
+- a special-category health trap that must be escalated rather than disclosed
 
 ## Action Space
 
-| Action | Parameters | Description |
-|--------|-----------|-------------|
-| `query_silo` | `silo_name`: `"billing"` or `"crm"` | Query a data silo |
-| `classify_field` | `field_id`: field name, `decision`: `"disclose"` or `"withhold"` | Classify a field |
-| `verify_identity` | `verification_method` | Proportionate identity verification for `task_medium` |
-| `redact_span` | `ticket_id`, `sentence_index`, `decision` | Sentence redaction for `task_medium` |
-| `process_message` | `msg_id`, `action_label` | Case 3 message-level triage: disclose, partial_redact, exclude, or escalate |
-| `redact_sentence` | `msg_id`, `sentence_index`, `decision` | Case 3 sentence-level keep/redact decision for mixed-ownership Slack messages |
-| `escalate_with_reason` | `msg_id`, `reason` | Case 3 legal justification for an escalated message |
-| `compile_response` | *(none)* | Finalize and submit response |
+| Action | Parameters | Used in | Description |
+| --- | --- | --- | --- |
+| `query_silo` | `silo_name` | Easy, Medium | Query `billing` or `crm` |
+| `classify_field` | `field_id`, `decision` | Easy | Mark a structured field as `disclose` or `withhold` |
+| `verify_identity` | `verification_method` | Medium | Attempt a proportionate or disproportionate verification method |
+| `redact_span` | `ticket_id`, `sentence_index`, `decision` | Medium | Keep or redact one ticket sentence |
+| `process_message` | `msg_id`, `action_label` | Hard | Choose `disclose`, `partial_redact`, `exclude`, or `escalate` |
+| `redact_sentence` | `msg_id`, `sentence_index`, `decision` | Hard | Keep or redact one sentence in a mixed-ownership Slack message |
+| `escalate_with_reason` | `msg_id`, `reason_code`, `reason` | Hard | Supply structured + free-text escalation justification |
+| `compile_response` | none | All | Finalize the episode |
 
 ## Observation Space
 
+Common fields across tasks:
+
 | Field | Type | Description |
-|-------|------|-------------|
-| `task_id` | string | Current task identifier |
-| `dsar_request` | string | The DSAR request letter |
-| `merged_record` | dict | Currently revealed data fields and their values |
-| `available_actions` | list[str] | Available action types |
-| `silo_results` | list[str] | Silos queried so far |
-| `identity_verified` | bool | Whether identity has been confirmed |
-| `draft_response` | dict | Fields selected for disclosure |
-| `audit_trail` | list[str] | Action log |
-| `deadline_pressure` | float | 1.0 (fresh) → 0.0 (deadline) |
-| `steps_remaining` | int | Steps left in episode (max 30) |
-| `classified_fields` | list[str] | Fields already classified |
-| `tickets` | list | Case 2 support-ticket corpus after verification |
-| `processed_sentences` | dict | Case 2 sentence decisions |
-| `slack_export` | list | Case 3 candidate Slack messages with stable sentence indices |
-| `users_json` | dict | Case 3 visible Slack user mapping |
-| `processed_messages` | dict | Case 3 message decisions |
-| `escalation_log` | dict | Case 3 escalation reasons |
-| `messages_pending` | list[str] | Case 3 message IDs still awaiting triage |
-| `sentences_pending` | dict | Case 3 unresolved sentence indices |
-| `done` | bool | Whether episode has ended |
-| `reward` | float | Reward from last action |
+| --- | --- | --- |
+| `episode_id` | string | stable episode identifier |
+| `task_id` | string | current task |
+| `dsar_request` | string | request text shown to the agent |
+| `available_actions` | list[str] | action types currently valid |
+| `draft_response` | dict | current output under construction |
+| `audit_trail` | list | ordered step history |
+| `deadline_pressure` | float | time pressure signal |
+| `steps_remaining` | int | steps left in episode |
+| `compile_ready` | bool | whether `compile_response` is currently valid |
+| `terminal_details` | dict | task-specific terminal metrics on completion |
+
+Task-specific fields:
+
+- Easy
+  - `customer_record`
+  - `silo_results`
+  - `classified_fields`
+- Medium
+  - `phase`
+  - `identity_confidence`
+  - `identity_threshold`
+  - `submitted_identity`
+  - `internal_identity`
+  - `tickets`
+  - `processed_sentences`
+  - `pending_sentence_count`
+  - `total_sentence_count`
+  - `completion_coverage`
+- Hard
+  - `slack_export`
+  - `users_json`
+  - `processed_messages`
+  - `escalation_log`
+  - `escalation_reason_codes`
+  - `messages_pending`
+  - `sentences_pending`
 
 ## Reward Design
 
-### Step-Level Rewards (immediate, per action)
+### Easy
 
-| Action | Result | Reward |
-|--------|--------|--------|
-| Query valid silo (first time) | New data accessed | +0.05 |
-| Query silo (redundant) | Wasted step | -0.05 |
-| Query invalid silo | Hallucinated silo | -0.05 |
-| Classify correctly (disclose personal) | Correct | +0.10 |
-| Classify correctly (withhold internal) | Correct | +0.10 |
-| **Leak internal data** (disclose internal) | **Data breach** | **-0.30** |
-| Withhold personal data wrongly | Compliance failure | -0.15 |
-| Steps beyond free allowance (10) | Deadline pressure | -0.01/step |
+- positive reward for correct disclose/withhold decisions
+- negative reward for withholding requester-owned data
+- stronger negative reward for leaking internal-only data
+- terminal score based on disclosure precision/recall, privacy penalties, and light efficiency terms
 
-### Terminal Score (on compile_response)
+### Medium
 
+- positive reward for querying useful silos
+- positive reward for proportionate verification
+- negative reward for disproportionate verification
+- sentence-level reward for keep/redact correctness
+- terminal score combines identity quality, redaction quality, and completion coverage
+
+### Hard
+
+- positive reward for correct top-level message routing
+- positive reward for correct sentence-level splitting
+- reward bonus for structured escalation reasons
+- terminal score combines:
+  - top-level message accuracy
+  - sentence redaction quality
+  - escalation quality
+  - calibration penalties for especially bad top-level decisions
+
+## Design Decisions and Calibration Notes
+
+### Hard task ruggedness
+
+`task_hard` is intentionally rugged. Episodes that mishandle the most important compliance decisions can score very low or clip to `0.0`. This is deliberate: the benchmark is meant to distinguish mild mistakes from severe regulatory failures.
+
+### Bimodal hard-task behavior
+
+The hard task often produces a bimodal baseline pattern. Some trajectories land in a modest hard-performance band; others collapse to `0.0` after a catastrophic or compounded failure pattern. This is a feature of the environment design, not a symptom of flat grading.
+
+### Catastrophic vs compounded failure
+
+Hard zeros can happen in two ways:
+
+- direct catastrophic failure, especially on special-category handling
+- multiple major compliance-action errors in the same episode, such as failing escalation, disclosing a bot/system message, excluding requester-entitled data, or over-redacting mixed ownership content
+
+### Hosted-model variance vs environment determinism
+
+Environment-side generation and grading are deterministic for a fixed seed. However, hosted LLM providers can still introduce rerun variance even at `temperature=0.0`. In practice this means:
+
+- fixed seeds keep the **episode** stable
+- the external hosted model may still vary slightly in **behavior**
+
+### Strict compile gate
+
+The compile gate requires the agent to finish all pending work before submission. This is intentional and models a real compliance workflow: a DSAR response is not valid if the triage/redaction/escalation process is incomplete.
+
+## Baseline Configuration
+
+The baseline script is `inference.py` in the repo root and uses the OpenAI client against an OpenAI-compatible endpoint.
+
+Representative default per-task seeds:
+
+```text
+task_easy: 7
+task_medium: 3
+task_hard: 31
 ```
-F1 = harmonic_mean(precision, recall)
-privacy_penalty = leaked_count × 0.30 × (1 + leaked_count × 0.45)
-compliance_score = clamp(F1 - privacy_penalty, 0.0, 1.0)
-step_efficiency = clamp((MAX_STEPS - steps_used) / (MAX_STEPS - MIN_STEPS_CASE1), 0.0, 1.0)
-silo_efficiency = max(0, 1.0 - 0.5 * missing_required_silos - 0.25 * extra_silos)
-efficiency_score = 0.5 * step_efficiency + 0.5 * silo_efficiency
-score = 0.0 if compliance_score == 0 else clamp(0.9 * compliance_score + 0.1 * efficiency_score, 0.0, 1.0)
-```
 
-The **non-linear privacy penalty** makes each additional leak progressively more expensive:
-- 1 leak → 0.435 penalty
-- 2 leaks → 1.14 penalty (floors score to 0.0)
-- 3 leaks → 2.115 penalty
+Representative hosted-Qwen baseline behavior is:
 
-This formula keeps **compliance accuracy primary**, while still explicitly rewarding step efficiency and correct silo usage.
+| Task | Typical band |
+| --- | --- |
+| `task_easy` | around `0.95` |
+| `task_medium` | roughly `0.43` to `0.56` |
+| `task_hard` | roughly `0.0` to `0.30`, with occasional low-end collapse on severe failures |
 
-## Setup & Usage
+## Local Setup
 
 ### Install
 
 ```bash
-pip install openenv-core[core]
-cd dsar_env
 pip install -e .
 ```
 
-### Run Locally
+### Run the environment server locally
 
 ```bash
-# Start the environment server
 uvicorn server.app:app --host 0.0.0.0 --port 8000
+```
 
-# In another terminal, run the baseline agent
-API_BASE_URL=https://api.openai.com/v1 \
-MODEL_NAME=gpt-4o-mini \
-HF_TOKEN=your_key \
+### Run the baseline locally
+
+```bash
+API_BASE_URL=https://router.huggingface.co/v1
+MODEL_NAME=Qwen/Qwen2.5-72B-Instruct:fastest
+HF_TOKEN=your_token_here
+DSAR_ENV_URL=http://localhost:8000
 python inference.py
 ```
 
-### Run with Docker
+## Hugging Face Space Deployment
+
+The project is designed to run as a Docker-based HF Space.
+
+For remote baseline runs against your deployed Space, set:
+
+```bash
+DSAR_ENV_URL=https://<your-space>.hf.space
+```
+
+The inference script then targets the deployed environment instead of a local uvicorn instance.
+
+## Docker
 
 ```bash
 docker build -t dsar-env:latest .
 docker run -p 8000:8000 dsar-env:latest
 ```
 
-### Deploy to HuggingFace Spaces
+## Validation
 
-```bash
-openenv push --repo-id your-username/dsar-env
+Before submitting, verify:
+
+1. your HF Space responds to `POST /reset`
+2. `docker build` succeeds
+3. `openenv validate` succeeds
+4. `python inference.py` completes and emits only structured `[START]`, `[STEP]`, and `[END]` logs on stdout
+
+## Repository Layout
+
+```text
+dsar_env/
+  inference.py
+  models.py
+  client.py
+  openenv.yaml
+  Dockerfile
+  server/
+    app.py
+    constants.py
+    generator.py
+    grader.py
+    dsar_environment.py
+  tests/
 ```
 
-## Baseline Scores
+## Why This Is Novel
 
-Baseline score bands should be re-measured end-to-end with the current
-environment dependencies before final submission. The environment now supports
-all three tasks, including the implemented Case 3 hard task.
+This environment is not a generic “privacy” toy task. It combines:
 
-| Task | Expected Range | Description |
-|------|---------------|-------------|
-| `task_easy` | 0.45–0.60 | LLM handles obvious fields but still leaks or misses some operational metrics |
-| `task_medium` | 0.45–0.55 | Verification usually OK but sentence-level redaction is imprecise |
-| `task_hard` | 0.20–0.35 | Thread resolution fails, Article 9 escalation missed |
+- structured disclosure policy
+- workflow gating
+- sentence-level redaction
+- thread-aware message interpretation
+- legal escalation with structured reason codes
 
-## For RL Researchers
-
-This environment is designed for RL post-training. Wrap it with a Gymnasium adapter:
-
-```python
-from dsar_env import DSAREnv
-
-# Connect to running server
-with DSAREnv(base_url="http://localhost:8000").sync() as env:
-    obs = env.reset(task_id="task_easy")
-    
-    while not obs.observation.done:
-        action = your_policy(obs)  # Your RL agent
-        obs = env.step(action)
-    
-    print(f"Score: {obs.reward}")
-```
-
-Compatible with: **TRL**, **torchforge**, **SkyRL**, **ART**, **Oumi**.
+That combination makes it both practically useful and scientifically interesting for RL-style post-training.
 
 ## License
 

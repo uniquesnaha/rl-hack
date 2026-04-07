@@ -12,6 +12,8 @@ Environment variables:
                      Default: Qwen/Qwen2.5-72B-Instruct:fastest
     OPENAI_API_KEY - Primary API key for direct OpenAI usage
     HF_TOKEN       - Optional fallback for Hugging Face router usage
+    DSAR_ENV_URL   - OpenEnv HTTP endpoint for reset/step/state.
+                     Default: http://localhost:8000
     EPISODE_SEED   - Optional fixed seed for reproducible environment resets
     DSAR_TASKS     - Comma-separated task list override (default: task_easy)
     DSAR_TRACE     - Set to 1/true/on to print detailed debug logs
@@ -92,34 +94,42 @@ def _parse_task_seed_map(raw_value: str | None) -> dict[str, int]:
 
 # Configuration
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME = os.environ.get("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct:fastest")
+MODEL_NAME = os.environ.get("MODEL_NAME", "")
 HF_TOKEN = os.environ.get("HF_TOKEN", "")
-
-# The following variables are explicitly hardcoded for evaluation consistency
-# and to avoid side-effects from missing entries in local or grader .env files.
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 TEMPERATURE = 0.0  # keep deterministic
 MAX_TOKENS = 512
 MAX_STEPS = 30
-EPISODE_SEED = None
-TASK_SEED_MAP = {
-    "task_easy": 7,
-    "task_medium": 3,
-    "task_hard": 31
-}
-TASK_IDS = ["task_easy", "task_medium", "task_hard"]
-TRACE_ENABLED = True
-INFERENCE_MODE = "raw"
-CASE3_HEURISTIC_REQUESTED = False
-CASE3_HEURISTIC_ENABLED = False
-MULTI_SEED_VALUES = []
-TASK_SEEDS = TASK_SEED_MAP.copy()
+EPISODE_SEED = _parse_optional_int(os.environ.get("EPISODE_SEED"))
+TASK_SEED_MAP = _parse_task_seed_map(
+    os.environ.get("DSAR_TASK_SEEDS", "task_easy:7,task_medium:3,task_hard:31")
+)
+TASK_IDS = [
+    task.strip()
+    for task in os.environ.get("DSAR_TASKS", "task_easy,task_medium,task_hard").split(",")
+    if task.strip()
+]
+TRACE_ENABLED = os.environ.get("DSAR_TRACE", "").strip().lower() in {"1", "true", "yes", "on"}
+INFERENCE_MODE = os.environ.get("DSAR_INFERENCE_MODE", "raw").strip().lower()
+CASE3_HEURISTIC_REQUESTED = (
+    os.environ.get("DSAR_DEBUG_CASE3_HEURISTIC", os.environ.get("DSAR_USE_CASE3_HEURISTIC", ""))
+    .strip()
+    .lower()
+    in {"1", "true", "yes", "on"}
+)
+CASE3_HEURISTIC_ENABLED = INFERENCE_MODE == "debug" and CASE3_HEURISTIC_REQUESTED
+MULTI_SEED_VALUES = [
+    seed.strip()
+    for seed in os.environ.get("DSAR_MULTI_SEED", "").split(",")
+    if seed.strip()
+]
 
 # OpenAI-compatible client pointing at the configured LLM provider.
 def _select_api_key(base_url: str) -> str:
     lowered = base_url.lower()
     if "huggingface.co" in lowered:
         return HF_TOKEN
-    return os.environ.get("OPENAI_API_KEY", "") or HF_TOKEN
+    return OPENAI_API_KEY or HF_TOKEN
 
 
 client = OpenAI(
@@ -200,18 +210,18 @@ def trace(title: str, payload: object | None = None) -> None:
     if not TRACE_ENABLED:
         return
 
-    print(f"\n[TRACE] {title}")
+    print(f"\n[TRACE] {title}", file=sys.stderr)
     if payload is None:
         return
 
     if isinstance(payload, str):
-        print(payload)
+        print(payload, file=sys.stderr)
         return
 
     try:
-        print(json.dumps(payload, indent=2, ensure_ascii=True, default=str))
+        print(json.dumps(payload, indent=2, ensure_ascii=True, default=str), file=sys.stderr)
     except TypeError:
-        print(str(payload))
+        print(str(payload), file=sys.stderr)
 
 
 def merged_metadata(step_data: dict, observation: dict) -> dict:
@@ -629,7 +639,7 @@ def parse_model_action(response_text: str) -> dict:
     if re.search(r"compile_response", text, re.IGNORECASE):
         return {"action_type": "compile_response"}
 
-    print(f"  [WARN] Could not parse action from: {text[:120]}...")
+    print(f"  [WARN] Could not parse action from: {text[:120]}...", file=sys.stderr)
     return {"action_type": "compile_response"}
 
 
@@ -880,10 +890,6 @@ def run_episode(env_url: str, task_id: str, episode_seed: int | None = None) -> 
     """Run one episode against the environment and return score plus debug details."""
     import requests
 
-    print(f"\n{'=' * 60}")
-    print(f"Starting episode: {task_id}")
-    print(f"{'=' * 60}")
-
     reset_payload = {"task_id": task_id}
     if episode_seed is not None:
         reset_payload["seed"] = episode_seed
@@ -905,14 +911,6 @@ def run_episode(env_url: str, task_id: str, episode_seed: int | None = None) -> 
         episode_id = observation.get("metadata", {}).get("episode_id", "")
     done = reset_data.get("done", observation.get("done", False))
     episode_max_steps = max(MAX_STEPS, int(observation.get("steps_remaining", MAX_STEPS)))
-
-    record = observation.get("customer_record", [])
-    print(f"Episode ID: {episode_id}")
-    if episode_seed is not None:
-        print(f"Seed: {episode_seed}")
-    else:
-        print("Seed: random")
-    print(f"Fields in record: {len(record)}")
     trace("INITIAL OBSERVATION", observation)
 
     history = []
@@ -966,7 +964,7 @@ def run_episode(env_url: str, task_id: str, episode_seed: int | None = None) -> 
                         },
                     )
                 except Exception as exc:
-                    print(f"  [ERROR] LLM request failed: {exc}. Using fallback.")
+                    print(f"  [ERROR] LLM request failed: {exc}. Using fallback.", file=sys.stderr)
                     response_text = FALLBACK_ACTION
                     trace(
                         "RAW MODEL RESPONSE",
@@ -1034,8 +1032,6 @@ def run_episode(env_url: str, task_id: str, episode_seed: int | None = None) -> 
             )
         if action_dict.get("reason") is not None:
             action_str += f" {action_dict.get('reason_code', '')} :: {action_dict['reason']}"
-
-        print(f"  Step {step}: {action_str}")
         trace("STEP REQUEST", {"url": f"{env_url}/step", "json": {"action": action_dict}})
 
         step_resp = requests.post(
@@ -1056,7 +1052,6 @@ def run_episode(env_url: str, task_id: str, episode_seed: int | None = None) -> 
 
         error_flag = f" ERROR: {observation.get('error')}" if observation.get("error") else ""
         history.append(f"Step {step}: {action_str} -> reward {reward:+.4f}{error_flag}")
-        print(f"    Reward: {reward:+.4f} | Done: {done}{error_flag}")
         trace("UPDATED OBSERVATION", observation)
 
         log_step(step=step, action=action_str, reward=reward, done=done, error=observation.get("error"))
@@ -1069,13 +1064,8 @@ def run_episode(env_url: str, task_id: str, episode_seed: int | None = None) -> 
             terminal_metrics = _extract_terminal_metrics(meta, observation)
             if TRACE_ENABLED:
                 trace("TERMINAL METRICS", terminal_metrics)
-            print("\n  Episode complete!")
-            print(f"  Terminal score: {final_score:.4f}")
-            print(f"  Cumulative step reward: {total_reward:.4f}")
-            print(f"  Steps used: {step}")
             break
     else:
-        print(f"  Reached max steps ({episode_max_steps}).")
         final_score = observation.get("metadata", {}).get("terminal_score", 0.0)
         terminal_metrics = _extract_terminal_metrics(observation.get("metadata", {}), observation)
         step = episode_max_steps
@@ -1092,35 +1082,29 @@ def run_episode(env_url: str, task_id: str, episode_seed: int | None = None) -> 
 
 def main() -> None:
     """Run baseline inference across the currently implemented task set."""
-    env_url = os.environ.get("DSAR_ENV_URL", "http://localhost:8000")
+    env_url = os.environ.get("DSAR_ENV_URL", "huggingface.co/spaces/snaha1911/dsar-env")
     if INFERENCE_MODE not in {"raw", "debug"}:
-        print(f"ERROR: Unsupported DSAR_INFERENCE_MODE '{INFERENCE_MODE}'. Use raw or debug.")
+        print(
+            f"ERROR: Unsupported DSAR_INFERENCE_MODE '{INFERENCE_MODE}'. Use raw or debug.",
+            file=sys.stderr,
+        )
         sys.exit(1)
     if CASE3_HEURISTIC_REQUESTED and INFERENCE_MODE != "debug":
         print(
             "ERROR: Case 3 heuristic assistance requires DSAR_INFERENCE_MODE=debug. "
-            "Raw benchmark mode cannot use heuristic assistance."
+            "Raw benchmark mode cannot use heuristic assistance.",
+            file=sys.stderr,
         )
         sys.exit(1)
-
-    print(f"DSAR Environment URL: {env_url}")
-    print(f"LLM API: {API_BASE_URL}")
-    print(f"Model: {MODEL_NAME}")
-    if TASK_SEED_MAP:
-        print(f"Task Seeds: {TASK_SEED_MAP}")
-    elif EPISODE_SEED is not None:
-        print(f"Seed: {EPISODE_SEED}")
-    print(f"{'=' * 60}")
 
     import requests
 
     try:
         health = requests.get(f"{env_url}/health", timeout=10)
         health.raise_for_status()
-        print(f"Environment health: {health.json()}")
     except Exception as exc:
-        print(f"ERROR: Cannot reach environment at {env_url}: {exc}")
-        print("Make sure the DSAR environment server is running.")
+        print(f"ERROR: Cannot reach environment at {env_url}: {exc}", file=sys.stderr)
+        print("Make sure the DSAR environment server is running.", file=sys.stderr)
         sys.exit(1)
 
     tasks = TASK_IDS
@@ -1136,7 +1120,7 @@ def main() -> None:
                     result = run_episode(env_url, task_id, episode_seed=_parse_optional_int(seed_value))
                     task_scores.append(result)
                 except Exception as exc:
-                    print(f"\n  ERROR running {task_id} seed {seed_value}: {exc}")
+                    print(f"\n  ERROR running {task_id} seed {seed_value}: {exc}", file=sys.stderr)
                     task_scores.append(
                         {
                             "task_id": task_id,
@@ -1148,35 +1132,6 @@ def main() -> None:
                     )
             scores[task_id] = task_scores
 
-        elapsed = time.time() - start_time
-        print(f"\n{'=' * 60}")
-        print("MULTI-SEED SCORES")
-        print(f"{'=' * 60}")
-        for task_id, task_scores in scores.items():
-            numeric_scores = [result["score"] for result in task_scores]
-            mean_score = sum(numeric_scores) / len(numeric_scores) if numeric_scores else 0.0
-            print(
-                f"  {task_id}: mean={mean_score:.4f} "
-                f"min={min(numeric_scores):.4f} max={max(numeric_scores):.4f} "
-                f"seeds={','.join(MULTI_SEED_VALUES)}"
-            )
-            for seed_value, result in zip(MULTI_SEED_VALUES, task_scores):
-                metrics = result.get("terminal_metrics", {})
-                print(
-                    f"    seed={seed_value} score={result['score']:.4f} "
-                    f"metrics={json.dumps(metrics, default=str)}"
-                )
-                failure_summary = metrics.get("failure_summary", [])
-                if failure_summary:
-                    print("    failure_summary:")
-                    for line in failure_summary[:6]:
-                        print(f"      {line}")
-                if result["score"] <= 0.10 and result.get("history"):
-                    print("    last_actions:")
-                    for line in result["history"][-5:]:
-                        print(f"      {line}")
-        print(f"\n  Total runtime: {elapsed:.1f}s")
-        print(f"{'=' * 60}")
         return
 
     for task_id in tasks:
@@ -1185,18 +1140,8 @@ def main() -> None:
             result = run_episode(env_url, task_id, episode_seed=episode_seed)
             scores[task_id] = result["score"]
         except Exception as exc:
-            print(f"\n  ERROR running {task_id}: {exc}")
+            print(f"\n  ERROR running {task_id}: {exc}", file=sys.stderr)
             scores[task_id] = 0.0
-
-    elapsed = time.time() - start_time
-
-    print(f"\n{'=' * 60}")
-    print("BASELINE SCORES")
-    print(f"{'=' * 60}")
-    for task_id, score in scores.items():
-        print(f"  {task_id}: {score:.4f}")
-    print(f"\n  Total runtime: {elapsed:.1f}s")
-    print(f"{'=' * 60}")
 
 
 if __name__ == "__main__":
