@@ -1,6 +1,6 @@
 ---
 title: DSAR Env
-emoji: shield
+emoji: 🛡️
 colorFrom: blue
 colorTo: indigo
 sdk: docker
