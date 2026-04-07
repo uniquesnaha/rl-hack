@@ -40,12 +40,13 @@ from .constants import (
 
 CONSTRAINT_LEAK_LIMIT = 3
 MIN_STEPS_CASE1 = len(REQUESTER_DATA_FIELDS) + len(INTERNAL_ONLY_FIELDS) + len(CASE1_VALID_SILOS) + 1
-TASK_SCORE_EPS = 0.0001
+MIN_VALID_TASK_SCORE = 0.002
+MAX_VALID_TASK_SCORE = 0.998
 
 
 def clamp_task_score(value: float) -> float:
     """Clamp final task scores into the open interval (0, 1)."""
-    return round(max(TASK_SCORE_EPS, min(1.0 - TASK_SCORE_EPS, value)), 4)
+    return round(max(MIN_VALID_TASK_SCORE, min(MAX_VALID_TASK_SCORE, value)), 4)
 
 
 def compute_step_reward(

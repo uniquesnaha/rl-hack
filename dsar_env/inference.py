@@ -192,7 +192,8 @@ Rules:
 
 FALLBACK_ACTION = "compile_response"
 MODEL_ACTION_MAX_RETRIES = 3
-TASK_SCORE_EPS = 0.0001
+MIN_VALID_TASK_SCORE = 0.002
+MAX_VALID_TASK_SCORE = 0.998
 
 CASE3_HEALTH_TERMS = (
     "anxiety",
@@ -252,7 +253,7 @@ def trace(title: str, payload: object | None = None) -> None:
 
 def _clamp_task_score(value: float) -> float:
     """Clamp reported task scores into the open interval (0, 1)."""
-    return round(max(TASK_SCORE_EPS, min(1.0 - TASK_SCORE_EPS, value)), 4)
+    return round(max(MIN_VALID_TASK_SCORE, min(MAX_VALID_TASK_SCORE, value)), 4)
 
     try:
         print(json.dumps(payload, indent=2, ensure_ascii=True, default=str), file=sys.stderr)
