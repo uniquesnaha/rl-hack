@@ -40,6 +40,12 @@ from .constants import (
 
 CONSTRAINT_LEAK_LIMIT = 3
 MIN_STEPS_CASE1 = len(REQUESTER_DATA_FIELDS) + len(INTERNAL_ONLY_FIELDS) + len(CASE1_VALID_SILOS) + 1
+TASK_SCORE_EPS = 0.0001
+
+
+def clamp_task_score(value: float) -> float:
+    """Clamp final task scores into the open interval (0, 1)."""
+    return round(max(TASK_SCORE_EPS, min(1.0 - TASK_SCORE_EPS, value)), 4)
 
 
 def compute_step_reward(
@@ -104,9 +110,9 @@ def compute_terminal_score(
 ) -> float:
     """Compute the Case 1 terminal score."""
     if not isinstance(draft_response, dict):
-        return 0.0
+        return clamp_task_score(0.0)
     if not all(isinstance(key, str) for key in draft_response.keys()):
-        return 0.0
+        return clamp_task_score(0.0)
 
     agent_disclosed = set(draft_response.keys())
     requester_fields = set(REQUESTER_DATA_FIELDS)
@@ -139,9 +145,9 @@ def compute_terminal_score(
     efficiency_score = 0.5 * step_efficiency + 0.5 * silo_efficiency
 
     if compliance_score == 0.0:
-        return 0.0
+        return clamp_task_score(0.0)
 
-    return round(max(0.0, min(1.0, 0.9 * compliance_score + 0.1 * efficiency_score)), 4)
+    return clamp_task_score(0.9 * compliance_score + 0.1 * efficiency_score)
 
 
 def compute_step_reward_case2(
@@ -260,14 +266,14 @@ def compute_terminal_score_case2_details(
     if not isinstance(processed_sentences, dict):
         return {
             "schema_gate": 0.0,
-            "task2_score": 0.0,
+            "task2_score": clamp_task_score(0.0),
             "completion_coverage": 0.0,
             "termination_reason": termination_reason,
         }
     if not isinstance(ticket_ground_truth, dict):
         return {
             "schema_gate": 0.0,
-            "task2_score": 0.0,
+            "task2_score": clamp_task_score(0.0),
             "completion_coverage": 0.0,
             "termination_reason": termination_reason,
         }
@@ -277,14 +283,14 @@ def compute_terminal_score_case2_details(
         if ticket_id not in ticket_ground_truth:
             return {
                 "schema_gate": 0.0,
-                "task2_score": 0.0,
+                "task2_score": clamp_task_score(0.0),
                 "completion_coverage": 0.0,
                 "termination_reason": termination_reason,
             }
         if not isinstance(sentence_decisions, dict):
             return {
                 "schema_gate": 0.0,
-                "task2_score": 0.0,
+                "task2_score": clamp_task_score(0.0),
                 "completion_coverage": 0.0,
                 "termination_reason": termination_reason,
             }
@@ -292,14 +298,14 @@ def compute_terminal_score_case2_details(
             if sentence_index not in ticket_ground_truth[ticket_id]:
                 return {
                     "schema_gate": 0.0,
-                    "task2_score": 0.0,
+                    "task2_score": clamp_task_score(0.0),
                     "completion_coverage": 0.0,
                     "termination_reason": termination_reason,
                 }
             if decision not in allowed_decisions:
                 return {
                     "schema_gate": 0.0,
-                    "task2_score": 0.0,
+                    "task2_score": clamp_task_score(0.0),
                     "completion_coverage": 0.0,
                     "termination_reason": termination_reason,
                 }
@@ -380,7 +386,7 @@ def compute_terminal_score_case2_details(
             identity_score -= 0.20
         identity_score = max(0.0, min(1.0, identity_score))
     pre_completion_score = max(0.0, min(1.0, 0.30 * identity_score + 0.70 * redaction_score))
-    task2_score = max(0.0, min(1.0, completion_coverage * pre_completion_score))
+    task2_score = clamp_task_score(completion_coverage * pre_completion_score)
 
     return {
         "schema_gate": 1.0,
@@ -760,7 +766,7 @@ def compute_terminal_score_case3(
         "calibration_penalty": 0.0,
         "n_pii_breaches": 0,
         "privacy_penalty": 0.0,
-        "task3_score": 0.0,
+        "task3_score": clamp_task_score(0.0),
         "termination_reason": "unknown",
         "failure_summary": [],
         "message_diagnostics": {},
@@ -824,7 +830,7 @@ def compute_terminal_score_case3(
     n_breaches = _count_pii_breaches_case3(agent_processed, ground_truth)
     privacy_penalty = n_breaches * 0.30 * (1.0 + n_breaches * 0.50)
     raw = 0.40 * c1 + 0.30 * c2 + 0.30 * c3 - privacy_penalty - calibration_penalty
-    task3_score = max(0.0, min(1.0, raw))
+    task3_score = clamp_task_score(raw)
 
     return {
         "schema_gate": 1.0,

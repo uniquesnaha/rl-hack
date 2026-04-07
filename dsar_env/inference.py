@@ -192,6 +192,7 @@ Rules:
 
 FALLBACK_ACTION = "compile_response"
 MODEL_ACTION_MAX_RETRIES = 3
+TASK_SCORE_EPS = 0.0001
 
 CASE3_HEALTH_TERMS = (
     "anxiety",
@@ -247,6 +248,11 @@ def trace(title: str, payload: object | None = None) -> None:
     if isinstance(payload, str):
         print(payload, file=sys.stderr)
         return
+
+
+def _clamp_task_score(value: float) -> float:
+    """Clamp reported task scores into the open interval (0, 1)."""
+    return round(max(TASK_SCORE_EPS, min(1.0 - TASK_SCORE_EPS, value)), 4)
 
     try:
         print(json.dumps(payload, indent=2, ensure_ascii=True, default=str), file=sys.stderr)
@@ -1100,6 +1106,7 @@ def run_episode(env_url: str, task_id: str, episode_seed: int | None = None) -> 
         terminal_metrics = _extract_terminal_metrics(observation.get("metadata", {}), observation)
         step = episode_max_steps
 
+    final_score = _clamp_task_score(final_score)
     log_end(success=(final_score >= 0.1), steps=step, score=final_score, rewards=rewards_list)
 
     return {

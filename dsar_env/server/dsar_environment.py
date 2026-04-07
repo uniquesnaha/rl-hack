@@ -35,6 +35,7 @@ from .constants import (
 )
 from .generator import generate_case1_episode, generate_case2_episode, generate_case3_episode
 from .grader import (
+    clamp_task_score,
     compute_step_reward,
     compute_step_reward_case2,
     compute_step_reward_case3,
@@ -502,7 +503,7 @@ class DSAREnvironment(Environment):
                 episode.cumulative_reward += step_reward
                 episode.done = True
                 episode.audit_trail.append(AuditEntry(step=episode.step_count, action="compile_response", description="compile_response called before identity threshold was reached", reward=step_reward))
-                return self._build_observation(episode, reward=step_reward, error="Cannot compile response before identity confidence reaches the threshold.", done=True, extra_metadata={"terminal_score": 0.0, "steps_used": episode.step_count})
+                return self._build_observation(episode, reward=step_reward, error="Cannot compile response before identity confidence reaches the threshold.", done=True, extra_metadata={"terminal_score": clamp_task_score(0.0), "steps_used": episode.step_count})
             if episode.phase == "redaction" and not _all_case2_sentences_processed(episode):
                 episode.blocked_compile_attempts += 1
                 error = "All ticket sentences must be processed before compile_response."
@@ -581,7 +582,7 @@ class DSAREnvironment(Environment):
                 )
                 if episode.phase == "redaction"
                 else {
-                    "task2_score": 0.0,
+                    "task2_score": clamp_task_score(0.0),
                     "completion_coverage": 0.0,
                     "termination_reason": "max_steps_identity_timeout",
                 }
@@ -792,7 +793,7 @@ class DSAREnvironment(Environment):
                 error="CONSTRAINT VIOLATED: special-category health data was disclosed.",
                 done=True,
                 extra_metadata={
-                    "terminal_score": 0.0,
+                    "terminal_score": clamp_task_score(0.0),
                     "steps_used": episode.step_count,
                     **details,
                 },
