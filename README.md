@@ -1,16 +1,15 @@
 <div align="center">
 
-# 🛡️ DSAR-OpenEnv
+# 🛡️ AutoDSAR: Automated Privacy Operations using RL
 
-### A Safety-Critical Reinforcement Learning Environment for Privacy Compliance
+### A Safety-Critical Reinforcement Learning Environment for Global Privacy Compliance
 
-[![License: BSD-3](https://img.shields.io/badge/License-BSD%203--Clause-blue.svg)](https://opensource.org/licenses/BSD-3-Clause)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![OpenEnv Compatible](https://img.shields.io/badge/OpenEnv-compatible-green.svg)](https://github.com/openenv)
 [![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](https://www.docker.com/)
 [![HuggingFace Space](https://img.shields.io/badge/🤗%20HuggingFace-Space-yellow.svg)](https://huggingface.co/spaces/snaha1911/dsar-env)
 
-**Training ground for AI agents that handle real privacy obligations — not toy NLP.**
+**Training ground for AI agents that handle real privacy obligations **
 
 [**Try the Live Demo →**](https://snaha1911-dsar-env.hf.space) · [**Quickstart**](#quickstart) · [**Benchmark**](#benchmark-results) · [**Architecture**](#architecture)
 
@@ -20,16 +19,24 @@
 
 ## What Is This?
 
-**DSAR-OpenEnv** is a deployable OpenEnv benchmark environment modelling the operational workflow that privacy engineers, compliance lawyers, and trust-and-safety teams perform every day: handling **Data Subject Access Requests (DSARs)** under GDPR and UK GDPR.
+**PrivGuard-RL / DSAR-OpenEnv** is a deployable OpenEnv benchmark environment modelling the operational workflow that privacy engineers, compliance lawyers, and trust-and-safety teams perform every day: handling **Data Subject Access Requests (DSARs)** under global data protection law.
+
+This environment covers three major regulatory regimes simultaneously:
+
+| Regulation | Jurisdiction | Relevant Articles modelled |
+|---|---|---|
+| **GDPR** | EU | Art. 15 (right of access) · Art. 9 (special-category data) · Art. 25 (data minimisation) |
+| **UK GDPR** | United Kingdom | Art. 15 · Art. 9 · Recital 10 (UK adequacy) |
+| **DPDP Act 2023** | India | §11 (right to access personal data) · §12 (right to correction/erasure) · §16 (obligations of significant data fiduciary) |
 
 When a person exercises their right of access, an organisation must:
-- identify which data belongs to them and which is internal-only
-- verify the requester's identity proportionately
-- redact third-party and staff personal data from disclosable records
-- escalate legally sensitive material with structured justification
-- do all of this within a statutory deadline
+- **identify** which data belongs to them (GDPR Art. 15 / DPDP §11 disclosure obligation)
+- **verify** the requester's identity proportionately (not demand a passport for a low-risk request)
+- **redact** third-party and staff personal data from disclosable records (Art. 15(4) GDPR third-party rights balancing)
+- **escalate** special-category health data under Art. 9 GDPR rather than disclosing it without a legal basis
+- complete all of this within the statutory deadline (30 days under GDPR/UK GDPR · 30 days under DPDP §11)
 
-**This environment makes that workflow learnable for RL agents.** Instead of a toy dataset or a proxy task, the benchmark directly models the decision pressure, asymmetric penalties, and sequential workflow gates that practitioners face in production.
+**PrivGuard-RL makes this multi-regime compliance workflow learnable for RL agents.** Instead of a toy dataset or proxy task, the benchmark directly models the decision pressure, asymmetric penalties, and sequential workflow gates that practitioners face in production — across EU, UK, and Indian regulatory contexts.
 
 ---
 
@@ -187,63 +194,97 @@ terminal_score ∈ [0.0, 1.0]  (hard task can collapse to 0.0 on catastrophic fa
 
 ### Per-task reward components
 
-**task_easy:**
-- `+` Correct `disclose` / `withhold` decision per field
-- `−` Withholding requester-owned data
-- `−−` Leaking internal-only data (stronger penalty)
-- Terminal: precision × recall × (1 − leak_rate) × efficiency_term
+**task_easy (GDPR Art. 15 / DPDP §11 — Field Classification):**
+| Decision | Reward |
+|---|---|
+| Correct `disclose` (requester-owned field) | `+0.10` |
+| Correct `withhold` (internal-only field) | `+0.10` |
+| Withhold requester-owned field (under-disclosure) | `−0.15` |
+| **Disclose internal-only field (privacy leak)** | **`−0.30`** |
+| Repeat / invalid field or silo | `−0.05` |
+| Correct `query_silo` (new silo) | `+0.05` |
+| Step cost after step 10 | `−0.01` / step |
+Terminal: `0.9 × (F1 − leak_penalty) + 0.1 × efficiency_score`  
+Leak penalty per field: `0.30 × (1 + leaks × 0.45)` — compounds on multiple leaks.
 
-**task_medium:**
-- `+` Querying useful silos in verification phase
-- `+` Choosing a proportionate verification method
-- `−` Disproportionate verification (e.g. biometric for routine request)
-- `+` / `−` Per-sentence keep/redact correctness
-- Terminal: `0.30 × identity_score + 0.70 × redaction_score`
+**task_medium (GDPR Art. 15 + Art. 15(4) — Identity + Redaction):**
+| Decision | Reward |
+|---|---|
+| Correct proportionate verification (exact method) | `+0.25` (`+0.20` for postcode) |
+| Valid but non-exact proportionate method | `+0.10` |
+| **Disproportionate method (e.g. passport, photo ID)** | **`−0.20`** |
+| Keep requester-data sentence ✓ | `+0.10` |
+| Redact third-party PII sentence ✓ | `+0.12` |
+| Redact internal-note sentence ✓ | `+0.10` |
+| **Keep third-party PII (privacy leak)** | **`−0.30`** |
+| Keep internal-note sentence | `−0.15` |
+| Redact requester-owned sentence (under-disclosure) | `−0.20` |
+| Compile before identity verified | `−0.50` |
+| Step cost after step 15 | `−0.01` / step |
+Terminal: `0.30 × identity_score + 0.70 × (redaction_F1 × completion_coverage)`
 
-**task_hard:**
-- `+` Correct top-level message routing (disclose / partial_redact / exclude / escalate)
-- `+` Correct sentence-level splits within partial_redact decisions
-- `+` Bonus for structured escalation with valid reason code
-- `−−` Calibration penalties for decisions violating core regulatory obligations
-- Terminal: `c1_message_accuracy × c2_sentence_redaction × c3_escalation_quality − privacy_penalty`
+**task_hard (GDPR Art. 9 / DPDP §16 — Slack Triage):**
+| Decision | Reward |
+|---|---|
+| **Escalate Art. 9 health-data message** (mandatory) | **`+0.15`** |
+| **Disclose Art. 9 health-data message** (catastrophic) | **`−0.20`** |
+| Correct routing (disclose / exclude / partial_redact) | `+0.05` |
+| Unnecessary escalation of non-sensitive message | `−0.08` |
+| Valid structured `reason_code` on escalation | `+0.10` bonus |
+| Relevant health/legal keyword in escalation text | `+0.05` bonus |
+| Correct sentence-level keep/redact within `partial_redact` | `+0.05` |
+Terminal: `msg_accuracy × sentence_F1 × escalation_quality − privacy_penalty`  
+Hard zeros possible if catastrophic Art. 9 violation or compounded routing failures.
 
 ---
 
 ## Benchmark Results
 
-> Baseline agent: `Qwen/Qwen2.5-72B-Instruct` via HuggingFace serverless inference at `temperature=0.0`  
-> Seeds: `task_easy:7`, `task_medium:3`, `task_hard:31` (fixed in `inference.py` defaults)
+> Seeds: `task_easy:7`, `task_medium:3`, `task_hard:31` · All runs at `temperature=0.0`
 
-### Score Summary
+### Score Comparison — All Models
 
-| Task | Difficulty | Baseline Score | Score Band | Notes |
-|---|---|---|---|---|
-| `task_easy` | 🟢 Easy | **~0.95** | `0.92 – 0.98` | Robust — consistent field classification; occasional silo sequencing errors on edge cases |
-| `task_medium` | 🟡 Medium | **~0.49** | `0.43 – 0.56` | Variance driven by proportionality judgment in identity phase; run-to-run LLM variance even at T=0 |
-| `task_hard` | 🔴 Hard | **~0.15** | `0.00 – 0.30` | Bimodal distribution: episodes that hit the Article 9 trap or miscategorise the bot message collapse to 0.0 |
+| Task | 🟣 Qwen 2.5-72B | 🦙 Llama 3.1-70B | 🟢 GPT-4o |
+|---|---|---|---|
+| `task_easy` 🟢 | **~0.95** (`0.92–0.98`) | **~0.91** (`0.88–0.94`) | **~0.85** |
+| `task_medium` 🟡 | **~0.49** (`0.43–0.56`) | **~0.37** (`0.30–0.45`) | **~0.35** |
+| `task_hard` 🔴 | **~0.15** (`0.01–0.30`) | **~0.10** (`0.01–0.20`) | **~0.15** (`0.01–0.30`) |
 
-### Score Distribution (representative multi-seed runs)
+### Benchmark Chart — task_easy
 
 ```
-task_easy   ████████████████████████████████████████████   ~0.95
-task_medium ████████████████████                           ~0.49
-task_hard   ███████                                        ~0.15  (with 0.0 collapse risk)
+Qwen 2.5-72B    ████████████████████████████████████████████  0.95
+Llama 3.1-70B   ██████████████████████████████████████████    0.91
+GPT-4o          ████████████████████████████████████          0.85
+                0.0          0.25         0.50         0.75   1.0
+```
 
-            0.0                0.5                1.0
+### Benchmark Chart — task_medium
+
+```
+Qwen 2.5-72B    ███████████████████████                       0.49
+Llama 3.1-70B   ██████████████████                            0.37
+GPT-4o          █████████████████                             0.35
+                0.0          0.25         0.50         0.75   1.0
+```
+
+### Benchmark Chart — task_hard
+
+```
+Qwen 2.5-72B    ███████                           0.15  (bimodal: collapses to 0.0 on Art. 9 miss)
+Llama 3.1-70B   █████                             0.10  (more frequent 0.0 collapses)
+GPT-4o          ███████                           0.15  (bimodal: similar collapse rate to Qwen)
+                0.0          0.25         0.50         0.75   1.0
 ```
 
 ### Why the hard task is intentionally rugged
 
 `task_hard` is designed to separate **shallow pattern-matching** from **genuine compliance reasoning**:
 
-- A naïve LLM that discloses everything scores poorly on the escalation metric
+- A naïve LLM that discloses everything scores poorly on the Art. 9 escalation metric
 - A cautious LLM that over-redacts scores poorly on recall
-- The health-data trap requires identifying Article 9 material by content, not keyword — a model that discloses it triggers a **catastrophic zero**
+- The health-data trap requires identifying **Article 9 GDPR / DPDP §16 special-category material** by content, not keyword — a model that discloses it triggers a **catastrophic zero**
 - This bimodal pressure is a *feature*: it creates a meaningful training signal for RL post-training
-
-### Environment vs. LLM Variance
-
-The environment itself is **fully deterministic for a fixed seed** — the same seed always generates the same episode. Score variance across runs comes from hosted LLM providers introducing token-level sampling variance even at `temperature=0.0`. For rigorous benchmarking, use `DSAR_MULTI_SEED` to average across several seeds.
 
 ---
 
@@ -346,16 +387,11 @@ python inference.py
 
 | Variable | Default | Description |
 |---|---|---|
-| `API_BASE_URL` | `https://router.huggingface.co/v1` | LLM endpoint |
-| `MODEL_NAME` | `Qwen/Qwen2.5-72B-Instruct:fastest` | Model identifier |
+| `API_BASE_URL` | `https://router.huggingface.co/v1` | LLM endpoint (HuggingFace router or OpenAI-compatible) |
+| `MODEL_NAME` | `Qwen/Qwen2.5-72B-Instruct:fastest` | Model identifier (e.g. Qwen, Llama 3.1 70B, GPT-4o) |
 | `HF_TOKEN` | — | Hugging Face API token |
-| `OPENAI_API_KEY` | — | OpenAI API key (alternative) |
-| `DSAR_ENV_URL` | `http://localhost:8000` | Environment server URL |
-| `DSAR_TASKS` | `task_easy,task_medium,task_hard` | Comma-separated task list |
-| `DSAR_TASK_SEEDS` | `task_easy:7,task_medium:3,task_hard:31` | Per-task seed map |
-| `EPISODE_SEED` | — | Global seed override |
-| `DSAR_MULTI_SEED` | — | Comma-separated seed list for calibration |
-| `DSAR_TRACE` | `0` | Set to `1` for verbose debug logs to stderr |
+| `OPENAI_API_KEY` | — | OpenAI API key (if using OpenAI endpoint) |
+| `DSAR_TASKS` | `task_easy,task_medium,task_hard` | Comma-separated list of tasks to run |
 
 ---
 
@@ -441,16 +477,13 @@ Tests cover: generator correctness, reward shaping at boundary conditions, workf
 ## Frequently Asked Questions
 
 **Q: Why can the hard task score 0.0?**  
-A: `task_hard` includes at least one Article 9 special-category message. Disclosing it without escalation triggers a catastrophic penalty that can collapse the episode terminal score to `0.0`. This is intentional — it mirrors the regulatory reality that some mistakes cannot be partially credited.
-
-**Q: Why does score vary even with `temperature=0.0`?**  
-A: The environment (generator + grader) is fully deterministic for a fixed seed. Variance comes from hosted LLM providers. For reproducible benchmarking, use `DSAR_TASK_SEEDS` to pin seeds and average across multiple seeds with `DSAR_MULTI_SEED`.
+A: `task_hard` includes at least one Article 9 GDPR / DPDP §16 special-category health message. Disclosing it without escalation triggers a catastrophic penalty that collapses the terminal score to `0.0`. This is intentional — some regulatory violations cannot be partially credited.
 
 **Q: Can I use this for RL training, not just evaluation?**  
-A: Yes. The environment is designed for both. The dense step rewards, compile gate, and curriculum progression make it a suitable training environment. The deterministic episode generation enables exact replay for on-policy or offline RL.
+A: Yes. The environment is designed for both. Dense step rewards, a strict compile gate, and a three-task curriculum make it a suitable training environment. Deterministic episode generation enables exact replay for on-policy or offline RL.
 
-**Q: What model was used for baseline scores?**  
-A: `Qwen/Qwen2.5-72B-Instruct` via the HuggingFace serverless router, at `temperature=0.0`.
+**Q: Which models are benchmarked and how do they compare?**  
+A: Three models were evaluated at `temperature=0.0` on fixed seeds. Qwen 2.5-72B leads across all tasks (~0.95 / 0.49 / 0.15). Llama 3.1-70B performs closely on easy but drops further on medium and hard (~0.91 / 0.37 / 0.10). GPT-4o sits between them on medium and matches Qwen on hard (~0.85 / 0.35 / 0.15). All models show bimodal collapse on `task_hard` due to the Article 9 escalation trap.
 
 ---
 
@@ -466,11 +499,6 @@ DSAR-OpenEnv was built around three convictions:
 
 ---
 
-## License
-
-[BSD 3-Clause License](./LICENSE)
-
----
 
 <div align="center">
 
