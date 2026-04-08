@@ -42,21 +42,27 @@ from openai import OpenAI
 
 
 def log_start(task: str, env: str, model: str) -> None:
-    print(f"[START] task={task} env={env} model={model}", flush=True)
+    print(
+        f"[START] task={_stdout_atom(task)} env={_stdout_atom(env)} model={_stdout_atom(model)}",
+        flush=True,
+    )
 
 
 def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
-    error_val = error if error else "null"
+    error_val = _stdout_atom(error) if error else "null"
     done_val = str(done).lower()
     print(
-        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
+        f"[STEP] step={step} action={_stdout_atom(action)} reward={reward:.2f} done={done_val} error={error_val}",
         flush=True,
     )
 
 
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
-    print(f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}", flush=True)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} score={_printed_score(score):.2f} rewards={rewards_str}",
+        flush=True,
+    )
 
 
 def _parse_optional_int(raw_value: str | None) -> int | None:
@@ -64,6 +70,18 @@ def _parse_optional_int(raw_value: str | None) -> int | None:
     if raw_value in (None, ""):
         return None
     return int(raw_value)
+
+
+def _stdout_atom(value: object | None) -> str:
+    """Render a value as a single-line stdout-safe token."""
+    if value in (None, ""):
+        return "null"
+    return str(value).replace("\r", " ").replace("\n", " ").strip()
+
+
+def _printed_score(value: float) -> float:
+    """Clamp displayed score so 2-decimal formatting stays strictly inside (0, 1)."""
+    return max(0.01, min(0.99, float(value)))
 
 
 def _parse_task_seed_map(raw_value: str | None) -> dict[str, int]:
@@ -676,7 +694,6 @@ def parse_model_action(response_text: str) -> dict:
     if re.search(r"compile_response", text, re.IGNORECASE):
         return {"action_type": "compile_response"}
 
-    print(f"  [WARN] Could not parse action from: {text[:120]}...", file=sys.stderr)
     return {"action_type": "compile_response"}
 
 
@@ -927,188 +944,190 @@ def run_episode(env_url: str, task_id: str, episode_seed: int | None = None) -> 
     """Run one episode against the environment and return score plus debug details."""
     import requests
 
+    log_start(task=task_id, env="dsar", model=MODEL_NAME)
+
     reset_payload = {"task_id": task_id}
     if episode_seed is not None:
         reset_payload["seed"] = episode_seed
-
-    trace("RESET REQUEST", {"url": f"{env_url}/reset", "json": reset_payload})
-
-    reset_resp = requests.post(
-        f"{env_url}/reset",
-        json=reset_payload,
-        timeout=30,
-    )
-    reset_resp.raise_for_status()
-    reset_data = reset_resp.json()
-    trace("RESET RESPONSE", reset_data)
-
-    observation = reset_data.get("observation", reset_data)
-    episode_id = observation.get("episode_id", "")
-    if not episode_id:
-        episode_id = observation.get("metadata", {}).get("episode_id", "")
-    done = reset_data.get("done", observation.get("done", False))
-    episode_max_steps = max(MAX_STEPS, int(observation.get("steps_remaining", MAX_STEPS)))
-    trace("INITIAL OBSERVATION", observation)
 
     history = []
     total_reward = 0.0
     final_score = 0.0
     terminal_metrics: dict = {}
     rewards_list: List[float] = []
+    steps_taken = 0
 
-    log_start(task=task_id, env="dsar", model=MODEL_NAME)
+    try:
+        trace("RESET REQUEST", {"url": f"{env_url}/reset", "json": reset_payload})
 
-    for step in range(1, episode_max_steps + 1):
-        if done:
-            break
-
-        obs_text = format_observation(observation)
-        user_prompt = f"Step {step}/{episode_max_steps}.\n\n{obs_text}"
-        if history:
-            user_prompt += "\n\nAction history (last 5):\n" + "\n".join(history[-5:])
-        trace("FORMATTED OBSERVATION", obs_text)
-
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ]
-        trace("MODEL MESSAGES", messages)
-
-        heuristic_action = choose_task_hard_action(observation) if CASE3_HEURISTIC_ENABLED else None
-        if heuristic_action is not None:
-            action_dict = heuristic_action
-            trace("RAW MODEL RESPONSE", {"action_source": "heuristic", "heuristic_action": action_dict})
-        else:
-            available_actions = _available_actions(observation)
-            retry_messages = list(messages)
-            action_dict = {"action_type": FALLBACK_ACTION}
-            for attempt in range(1, MODEL_ACTION_MAX_RETRIES + 1):
-                try:
-                    completion = client.chat.completions.create(
-                        model=MODEL_NAME,
-                        messages=retry_messages,
-                        temperature=TEMPERATURE,
-                        max_tokens=MAX_TOKENS,
-                        stream=False,
-                    )
-                    response_text = completion.choices[0].message.content or ""
-                    trace(
-                        "RAW MODEL RESPONSE",
-                        {
-                            "attempt": attempt,
-                            "response": response_text,
-                            "available_actions": available_actions,
-                        },
-                    )
-                except Exception as exc:
-                    print(f"  [ERROR] LLM request failed: {exc}. Using fallback.", file=sys.stderr)
-                    response_text = FALLBACK_ACTION
-                    trace(
-                        "RAW MODEL RESPONSE",
-                        {
-                            "attempt": attempt,
-                            "error": str(exc),
-                            "fallback": response_text,
-                            "available_actions": available_actions,
-                        },
-                    )
-
-                action_dict = parse_model_action(response_text)
-                if _action_type_allowed(action_dict, available_actions) and _action_params_allowed(action_dict, observation):
-                    break
-
-                invalid_action_type = action_dict.get("action_type", "unknown")
-                if not _action_type_allowed(action_dict, available_actions):
-                    correction_message = _action_validation_message(available_actions, invalid_action_type)
-                    trace_payload = {
-                        "attempt": attempt,
-                        "invalid_action_type": invalid_action_type,
-                        "available_actions": available_actions,
-                    }
-                else:
-                    correction_message = _action_parameter_validation_message(observation, action_dict)
-                    trace_payload = {
-                        "attempt": attempt,
-                        "invalid_action_type": invalid_action_type,
-                        "invalid_action": action_dict,
-                        "available_actions": available_actions,
-                    }
-                retry_messages = retry_messages + [
-                    {"role": "assistant", "content": response_text},
-                    {"role": "user", "content": correction_message},
-                ]
-                trace("ACTION VALIDATION RETRY", trace_payload)
-            else:
-                raise RuntimeError(
-                    "Model did not produce a valid action type after "
-                    f"{MODEL_ACTION_MAX_RETRIES} attempts. Allowed: {available_actions}"
-                )
-        action_dict["metadata"] = {"episode_id": episode_id}
-        trace("PARSED ACTION", action_dict)
-        action_str = f"{action_dict['action_type']}"
-        if action_dict.get("silo_name"):
-            action_str += f" {action_dict['silo_name']}"
-        if action_dict.get("field_id"):
-            action_str += f" {action_dict['field_id']} {action_dict.get('decision', '')}"
-        if action_dict.get("verification_method"):
-            action_str += f" {action_dict['verification_method']}"
-        if action_dict.get("ticket_id") is not None:
-            action_str += (
-                f" {action_dict['ticket_id']} "
-                f"{action_dict.get('sentence_index', '')} "
-                f"{action_dict.get('decision', '')}"
-            )
-        if action_dict.get("msg_id") is not None:
-            action_str += f" {action_dict['msg_id']}"
-        if action_dict.get("action_label") is not None:
-            action_str += f" {action_dict['action_label']}"
-        elif action_dict["action_type"] == "redact_sentence":
-            action_str += (
-                f" {action_dict.get('sentence_index', '')} "
-                f"{action_dict.get('decision', '')}"
-            )
-        if action_dict.get("reason") is not None:
-            action_str += f" {action_dict.get('reason_code', '')} :: {action_dict['reason']}"
-        trace("STEP REQUEST", {"url": f"{env_url}/step", "json": {"action": action_dict}})
-
-        step_resp = requests.post(
-            f"{env_url}/step",
-            json={"action": action_dict},
+        reset_resp = requests.post(
+            f"{env_url}/reset",
+            json=reset_payload,
             timeout=30,
         )
-        step_resp.raise_for_status()
-        step_data = step_resp.json()
-        trace("STEP RESPONSE", step_data)
+        reset_resp.raise_for_status()
+        reset_data = reset_resp.json()
+        trace("RESET RESPONSE", reset_data)
 
-        observation = step_data.get("observation", step_data)
-        meta = merged_metadata(step_data, observation)
-        reward = step_data.get("reward", observation.get("reward", 0.0)) or 0.0
-        done = step_data.get("done", observation.get("done", False))
-        total_reward += reward
-        rewards_list.append(reward)
+        observation = reset_data.get("observation", reset_data)
+        episode_id = observation.get("episode_id", "")
+        if not episode_id:
+            episode_id = observation.get("metadata", {}).get("episode_id", "")
+        done = reset_data.get("done", observation.get("done", False))
+        episode_max_steps = max(MAX_STEPS, int(observation.get("steps_remaining", MAX_STEPS)))
+        trace("INITIAL OBSERVATION", observation)
 
-        error_flag = f" ERROR: {observation.get('error')}" if observation.get("error") else ""
-        history.append(f"Step {step}: {action_str} -> reward {reward:+.4f}{error_flag}")
-        trace("UPDATED OBSERVATION", observation)
+        for step in range(1, episode_max_steps + 1):
+            if done:
+                break
 
-        log_step(step=step, action=action_str, reward=reward, done=done, error=observation.get("error"))
+            obs_text = format_observation(observation)
+            user_prompt = f"Step {step}/{episode_max_steps}.\n\n{obs_text}"
+            if history:
+                user_prompt += "\n\nAction history (last 5):\n" + "\n".join(history[-5:])
+            trace("FORMATTED OBSERVATION", obs_text)
 
-        if done:
-            terminal_score = meta.get("terminal_score")
-            if terminal_score is None:
-                terminal_score = 0.0 if observation.get("error") else reward
-            final_score = terminal_score
-            terminal_metrics = _extract_terminal_metrics(meta, observation)
-            if TRACE_ENABLED:
-                trace("TERMINAL METRICS", terminal_metrics)
-            break
-    else:
-        final_score = observation.get("metadata", {}).get("terminal_score", 0.0)
-        terminal_metrics = _extract_terminal_metrics(observation.get("metadata", {}), observation)
-        step = episode_max_steps
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ]
+            trace("MODEL MESSAGES", messages)
 
-    final_score = _clamp_task_score(final_score)
-    log_end(success=(final_score >= 0.1), steps=step, score=final_score, rewards=rewards_list)
+            heuristic_action = choose_task_hard_action(observation) if CASE3_HEURISTIC_ENABLED else None
+            if heuristic_action is not None:
+                action_dict = heuristic_action
+                trace("RAW MODEL RESPONSE", {"action_source": "heuristic", "heuristic_action": action_dict})
+            else:
+                available_actions = _available_actions(observation)
+                retry_messages = list(messages)
+                action_dict = {"action_type": FALLBACK_ACTION}
+                for attempt in range(1, MODEL_ACTION_MAX_RETRIES + 1):
+                    try:
+                        completion = client.chat.completions.create(
+                            model=MODEL_NAME,
+                            messages=retry_messages,
+                            temperature=TEMPERATURE,
+                            max_tokens=MAX_TOKENS,
+                            stream=False,
+                        )
+                        response_text = completion.choices[0].message.content or ""
+                        trace(
+                            "RAW MODEL RESPONSE",
+                            {
+                                "attempt": attempt,
+                                "response": response_text,
+                                "available_actions": available_actions,
+                            },
+                        )
+                    except Exception as exc:
+                        response_text = FALLBACK_ACTION
+                        trace(
+                            "RAW MODEL RESPONSE",
+                            {
+                                "attempt": attempt,
+                                "error": str(exc),
+                                "fallback": response_text,
+                                "available_actions": available_actions,
+                            },
+                        )
+
+                    action_dict = parse_model_action(response_text)
+                    if _action_type_allowed(action_dict, available_actions) and _action_params_allowed(action_dict, observation):
+                        break
+
+                    invalid_action_type = action_dict.get("action_type", "unknown")
+                    if not _action_type_allowed(action_dict, available_actions):
+                        correction_message = _action_validation_message(available_actions, invalid_action_type)
+                        trace_payload = {
+                            "attempt": attempt,
+                            "invalid_action_type": invalid_action_type,
+                            "available_actions": available_actions,
+                        }
+                    else:
+                        correction_message = _action_parameter_validation_message(observation, action_dict)
+                        trace_payload = {
+                            "attempt": attempt,
+                            "invalid_action_type": invalid_action_type,
+                            "invalid_action": action_dict,
+                            "available_actions": available_actions,
+                        }
+                    retry_messages = retry_messages + [
+                        {"role": "assistant", "content": response_text},
+                        {"role": "user", "content": correction_message},
+                    ]
+                    trace("ACTION VALIDATION RETRY", trace_payload)
+                else:
+                    raise RuntimeError(
+                        "Model did not produce a valid action type after "
+                        f"{MODEL_ACTION_MAX_RETRIES} attempts. Allowed: {available_actions}"
+                    )
+            action_dict["metadata"] = {"episode_id": episode_id}
+            trace("PARSED ACTION", action_dict)
+            action_str = f"{action_dict['action_type']}"
+            if action_dict.get("silo_name"):
+                action_str += f" {action_dict['silo_name']}"
+            if action_dict.get("field_id"):
+                action_str += f" {action_dict['field_id']} {action_dict.get('decision', '')}"
+            if action_dict.get("verification_method"):
+                action_str += f" {action_dict['verification_method']}"
+            if action_dict.get("ticket_id") is not None:
+                action_str += (
+                    f" {action_dict['ticket_id']} "
+                    f"{action_dict.get('sentence_index', '')} "
+                    f"{action_dict.get('decision', '')}"
+                )
+            if action_dict.get("msg_id") is not None:
+                action_str += f" {action_dict['msg_id']}"
+            if action_dict.get("action_label") is not None:
+                action_str += f" {action_dict['action_label']}"
+            elif action_dict["action_type"] == "redact_sentence":
+                action_str += (
+                    f" {action_dict.get('sentence_index', '')} "
+                    f"{action_dict.get('decision', '')}"
+                )
+            if action_dict.get("reason") is not None:
+                action_str += f" {action_dict.get('reason_code', '')} :: {action_dict['reason']}"
+            trace("STEP REQUEST", {"url": f"{env_url}/step", "json": {"action": action_dict}})
+
+            step_resp = requests.post(
+                f"{env_url}/step",
+                json={"action": action_dict},
+                timeout=30,
+            )
+            step_resp.raise_for_status()
+            step_data = step_resp.json()
+            trace("STEP RESPONSE", step_data)
+
+            observation = step_data.get("observation", step_data)
+            meta = merged_metadata(step_data, observation)
+            reward = step_data.get("reward", observation.get("reward", 0.0)) or 0.0
+            done = step_data.get("done", observation.get("done", False))
+            total_reward += reward
+            rewards_list.append(reward)
+            steps_taken = step
+
+            error_flag = f" ERROR: {observation.get('error')}" if observation.get("error") else ""
+            history.append(f"Step {step}: {action_str} -> reward {reward:+.4f}{error_flag}")
+            trace("UPDATED OBSERVATION", observation)
+
+            log_step(step=step, action=action_str, reward=reward, done=done, error=observation.get("error"))
+
+            if done:
+                terminal_score = meta.get("terminal_score")
+                if terminal_score is None:
+                    terminal_score = 0.0 if observation.get("error") else reward
+                final_score = terminal_score
+                terminal_metrics = _extract_terminal_metrics(meta, observation)
+                if TRACE_ENABLED:
+                    trace("TERMINAL METRICS", terminal_metrics)
+                break
+        else:
+            final_score = observation.get("metadata", {}).get("terminal_score", 0.0)
+            terminal_metrics = _extract_terminal_metrics(observation.get("metadata", {}), observation)
+            steps_taken = episode_max_steps
+    finally:
+        final_score = _clamp_task_score(final_score)
+        log_end(success=(final_score >= 0.1), steps=steps_taken, score=final_score, rewards=rewards_list)
 
     return {
         "task_id": task_id,
@@ -1124,17 +1143,8 @@ def main() -> None:
         os.environ.get("DSAR_ENV_URL", "https://snaha1911-dsar-env.hf.space")
     )
     if INFERENCE_MODE not in {"raw", "debug"}:
-        print(
-            f"ERROR: Unsupported DSAR_INFERENCE_MODE '{INFERENCE_MODE}'. Use raw or debug.",
-            file=sys.stderr,
-        )
         sys.exit(1)
     if CASE3_HEURISTIC_REQUESTED and INFERENCE_MODE != "debug":
-        print(
-            "ERROR: Case 3 heuristic assistance requires DSAR_INFERENCE_MODE=debug. "
-            "Raw benchmark mode cannot use heuristic assistance.",
-            file=sys.stderr,
-        )
         sys.exit(1)
 
     import requests
@@ -1142,9 +1152,7 @@ def main() -> None:
     try:
         health = requests.get(f"{env_url}/health", timeout=10)
         health.raise_for_status()
-    except Exception as exc:
-        print(f"ERROR: Cannot reach environment at {env_url}: {exc}", file=sys.stderr)
-        print("Make sure the DSAR environment server is running.", file=sys.stderr)
+    except Exception:
         sys.exit(1)
 
     tasks = TASK_IDS
@@ -1160,7 +1168,6 @@ def main() -> None:
                     result = run_episode(env_url, task_id, episode_seed=_parse_optional_int(seed_value))
                     task_scores.append(result)
                 except Exception as exc:
-                    print(f"\n  ERROR running {task_id} seed {seed_value}: {exc}", file=sys.stderr)
                     task_scores.append(
                         {
                             "task_id": task_id,
@@ -1179,8 +1186,7 @@ def main() -> None:
             episode_seed = TASK_SEED_MAP.get(task_id, EPISODE_SEED)
             result = run_episode(env_url, task_id, episode_seed=episode_seed)
             scores[task_id] = result["score"]
-        except Exception as exc:
-            print(f"\n  ERROR running {task_id}: {exc}", file=sys.stderr)
+        except Exception:
             scores[task_id] = 0.0
 
 
