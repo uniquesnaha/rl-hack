@@ -266,16 +266,16 @@ def compute_terminal_score_case2_details(
     """Compute Case 2 terminal score and expose calibration/debug details."""
     if not isinstance(processed_sentences, dict):
         return {
-            "schema_gate": 0.0,
+            "schema_gate": clamp_task_score(0.0),
             "task2_score": clamp_task_score(0.0),
-            "completion_coverage": 0.0,
+            "completion_coverage": clamp_task_score(0.0),
             "termination_reason": termination_reason,
         }
     if not isinstance(ticket_ground_truth, dict):
         return {
-            "schema_gate": 0.0,
+            "schema_gate": clamp_task_score(0.0),
             "task2_score": clamp_task_score(0.0),
-            "completion_coverage": 0.0,
+            "completion_coverage": clamp_task_score(0.0),
             "termination_reason": termination_reason,
         }
 
@@ -283,31 +283,31 @@ def compute_terminal_score_case2_details(
     for ticket_id, sentence_decisions in processed_sentences.items():
         if ticket_id not in ticket_ground_truth:
             return {
-                "schema_gate": 0.0,
+                "schema_gate": clamp_task_score(0.0),
                 "task2_score": clamp_task_score(0.0),
-                "completion_coverage": 0.0,
+                "completion_coverage": clamp_task_score(0.0),
                 "termination_reason": termination_reason,
             }
         if not isinstance(sentence_decisions, dict):
             return {
-                "schema_gate": 0.0,
+                "schema_gate": clamp_task_score(0.0),
                 "task2_score": clamp_task_score(0.0),
-                "completion_coverage": 0.0,
+                "completion_coverage": clamp_task_score(0.0),
                 "termination_reason": termination_reason,
             }
         for sentence_index, decision in sentence_decisions.items():
             if sentence_index not in ticket_ground_truth[ticket_id]:
                 return {
-                    "schema_gate": 0.0,
+                    "schema_gate": clamp_task_score(0.0),
                     "task2_score": clamp_task_score(0.0),
-                    "completion_coverage": 0.0,
+                    "completion_coverage": clamp_task_score(0.0),
                     "termination_reason": termination_reason,
                 }
             if decision not in allowed_decisions:
                 return {
-                    "schema_gate": 0.0,
+                    "schema_gate": clamp_task_score(0.0),
                     "task2_score": clamp_task_score(0.0),
-                    "completion_coverage": 0.0,
+                    "completion_coverage": clamp_task_score(0.0),
                     "termination_reason": termination_reason,
                 }
 
@@ -390,22 +390,22 @@ def compute_terminal_score_case2_details(
     task2_score = clamp_task_score(completion_coverage * pre_completion_score)
 
     return {
-        "schema_gate": 1.0,
-        "identity_score": round(identity_score, 4),
+        "schema_gate": clamp_task_score(1.0),
+        "identity_score": clamp_task_score(identity_score),
         "phase1_reward_sum": round(phase1_reward_sum, 4),
-        "kept_precision": round(kept_precision, 4),
-        "kept_recall": round(kept_recall, 4),
-        "redaction_f1": round(redaction_f1, 4),
-        "requester_keep_recall": round(requester_keep_recall, 4),
-        "unsafe_redaction_recall": round(unsafe_redaction_recall, 4),
-        "leakage_rate": round(leakage_rate, 4),
-        "redaction_score": round(redaction_score, 4),
-        "pre_completion_score": round(pre_completion_score, 4),
+        "kept_precision": clamp_task_score(kept_precision),
+        "kept_recall": clamp_task_score(kept_recall),
+        "redaction_f1": clamp_task_score(redaction_f1),
+        "requester_keep_recall": clamp_task_score(requester_keep_recall),
+        "unsafe_redaction_recall": clamp_task_score(unsafe_redaction_recall),
+        "leakage_rate": clamp_task_score(leakage_rate),
+        "redaction_score": clamp_task_score(redaction_score),
+        "pre_completion_score": clamp_task_score(pre_completion_score),
         "leaked_pii_count": leaked_pii_count,
         "total_pii_sentences": total_pii_sentences,
         "total_internal_sentences": total_internal_sentences,
         "total_requester_sentences": total_requester_sentences,
-        "completion_coverage": round(completion_coverage, 4),
+        "completion_coverage": clamp_task_score(completion_coverage),
         "termination_reason": termination_reason,
         "task2_score": round(task2_score, 4),
     }
@@ -621,7 +621,7 @@ def _compute_c1_case3(
             per_message_scores.append(-0.05)
 
     raw = sum(per_message_scores) / max_possible
-    return round(max(0.0, min(1.0, raw)), 4)
+    return clamp_task_score(raw)
 
 
 def _compute_c2_case3(
@@ -630,7 +630,7 @@ def _compute_c2_case3(
 ) -> float:
     agent_decision = agent_processed.get(mixed_sentence_msg_id, {})
     if agent_decision.get("action") != CASE3_ACTION_PARTIAL_REDACT:
-        return 0.0
+        return clamp_task_score(0.0)
 
     sentence_decisions = agent_decision.get("sentence_decisions", {})
     score = 0.0
@@ -643,7 +643,7 @@ def _compute_c2_case3(
     if sentence_decisions.get(0) == "redact":
         score -= 0.20
 
-    return round(max(0.0, min(1.0, score / 0.30)), 4)
+    return clamp_task_score(score / 0.30)
 
 
 def _compute_c3_case3(
@@ -689,7 +689,7 @@ def _compute_c3_case3(
     )
 
     raw = base + reason_code_bonus + keyword_bonus + lazy_penalty + calibration_bonus
-    return round(max(0.0, min(1.0, raw / 0.40)), 4)
+    return clamp_task_score(raw / 0.40)
 
 
 def _case3_failure_explanations(
@@ -760,13 +760,13 @@ def compute_terminal_score_case3(
     mixed_sentence_msg_id: str,
 ) -> Dict[str, Any]:
     default_details = {
-        "schema_gate": 0.0,
-        "c1_message_accuracy": 0.0,
-        "c2_sentence_redaction": 0.0,
-        "c3_escalation_quality": 0.0,
-        "calibration_penalty": 0.0,
+        "schema_gate": clamp_task_score(0.0),
+        "c1_message_accuracy": clamp_task_score(0.0),
+        "c2_sentence_redaction": clamp_task_score(0.0),
+        "c3_escalation_quality": clamp_task_score(0.0),
+        "calibration_penalty": clamp_task_score(0.0),
         "n_pii_breaches": 0,
-        "privacy_penalty": 0.0,
+        "privacy_penalty": clamp_task_score(0.0),
         "task3_score": clamp_task_score(0.0),
         "termination_reason": "unknown",
         "failure_summary": [],
@@ -794,11 +794,11 @@ def compute_terminal_score_case3(
             details = dict(default_details)
             details.update(
                 {
-                    "schema_gate": 1.0,
+                    "schema_gate": clamp_task_score(1.0),
                     "constraint_violated": True,
                     "termination_reason": "special_category_disclosed",
                     "n_pii_breaches": max(1, _count_pii_breaches_case3(agent_processed, ground_truth)),
-                    "privacy_penalty": 0.45,
+                    "privacy_penalty": clamp_task_score(0.45),
                     "failure_summary": failure_summary or [f"{sc_id}: special-category health trap disclosed"],
                     "message_diagnostics": message_diagnostics,
                     "incorrect_message_ids": incorrect_message_ids,
@@ -834,13 +834,13 @@ def compute_terminal_score_case3(
     task3_score = clamp_task_score(raw)
 
     return {
-        "schema_gate": 1.0,
-        "c1_message_accuracy": c1,
-        "c2_sentence_redaction": c2,
-        "c3_escalation_quality": c3,
-        "calibration_penalty": round(calibration_penalty, 4),
+        "schema_gate": clamp_task_score(1.0),
+        "c1_message_accuracy": clamp_task_score(c1),
+        "c2_sentence_redaction": clamp_task_score(c2),
+        "c3_escalation_quality": clamp_task_score(c3),
+        "calibration_penalty": clamp_task_score(calibration_penalty),
         "n_pii_breaches": n_breaches,
-        "privacy_penalty": round(privacy_penalty, 4),
+        "privacy_penalty": clamp_task_score(privacy_penalty),
         "task3_score": round(task3_score, 4),
         "termination_reason": "compile_response",
         "failure_summary": failure_summary,
