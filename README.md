@@ -19,7 +19,7 @@
 
 ## What Is This?
 
-**PrivGuard-RL / DSAR-OpenEnv** is a deployable OpenEnv benchmark environment modelling the operational workflow that privacy engineers, compliance lawyers, and trust-and-safety teams perform every day: handling **Data Subject Access Requests (DSARs)** under global data protection law.
+**AutoDSAR** is a deployable OpenEnv benchmark environment modelling the operational workflow that privacy engineers, compliance lawyers, and trust-and-safety teams perform every day: handling **Data Subject Access Requests (DSARs)** under global data protection law.
 
 This environment covers three major regulatory regimes simultaneously:
 
@@ -36,7 +36,7 @@ When a person exercises their right of access, an organisation must:
 - **escalate** legally sensitive material (such as health data) rather than negligently disclosing it (breach of GDPR Art. 9 / DPDP §8(5) security safeguards)
 - complete all of this within the statutory deadline (30 days under GDPR/UK GDPR)
 
-**PrivGuard-RL makes this multi-regime compliance workflow learnable for RL agents.** Instead of a toy dataset or proxy task, the benchmark directly models the decision pressure, asymmetric penalties, and sequential workflow gates that practitioners face in production — across EU, UK, and Indian regulatory contexts.
+**AutoDSAR makes this multi-regime compliance workflow learnable for RL agents.** Instead of a toy dataset or proxy task, the benchmark directly models the decision pressure, asymmetric penalties, and sequential workflow gates that practitioners face in production — across EU, UK, and Indian regulatory contexts.
 
 ---
 
