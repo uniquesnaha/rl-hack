@@ -9,7 +9,7 @@
 [![Docker](https://img.shields.io/badge/docker-ready-blue.svg)](https://www.docker.com/)
 [![HuggingFace Space](https://img.shields.io/badge/🤗%20HuggingFace-Space-yellow.svg)](https://huggingface.co/spaces/snaha1911/dsar-env)
 
-**Training ground for AI agents that handle real privacy obligations **
+**Training ground for AI agents that handle real privacy obligations**
 
 [**Try the Live Demo →**](https://snaha1911-dsar-env.hf.space) · [**Quickstart**](#quickstart) · [**Benchmark**](#benchmark-results) · [**Architecture**](#architecture)
 
@@ -27,14 +27,14 @@ This environment covers three major regulatory regimes simultaneously:
 |---|---|---|
 | **GDPR** | EU | Art. 15 (right of access) · Art. 9 (special-category data) · Art. 25 (data minimisation) |
 | **UK GDPR** | United Kingdom | Art. 15 · Art. 9 · Recital 10 (UK adequacy) |
-| **DPDP Act 2023** | India | §11 (right to access personal data) · §12 (right to correction/erasure) · §16 (obligations of significant data fiduciary) |
+| **DPDP Act 2023** | India | §11 (right to access information) · §12 (right to correction/erasure) · §8(5) (security safeguards to prevent breach) |
 
 When a person exercises their right of access, an organisation must:
-- **identify** which data belongs to them (GDPR Art. 15 / DPDP §11 disclosure obligation)
+- **identify** which data belongs to them (GDPR Art. 15 / DPDP §11 right to obtain information summary)
 - **verify** the requester's identity proportionately (not demand a passport for a low-risk request)
 - **redact** third-party and staff personal data from disclosable records (Art. 15(4) GDPR third-party rights balancing)
-- **escalate** special-category health data under Art. 9 GDPR rather than disclosing it without a legal basis
-- complete all of this within the statutory deadline (30 days under GDPR/UK GDPR · 30 days under DPDP §11)
+- **escalate** legally sensitive material (such as health data) rather than negligently disclosing it (breach of GDPR Art. 9 / DPDP §8(5) security safeguards)
+- complete all of this within the statutory deadline (30 days under GDPR/UK GDPR)
 
 **PrivGuard-RL makes this multi-regime compliance workflow learnable for RL agents.** Instead of a toy dataset or proxy task, the benchmark directly models the decision pressure, asymmetric penalties, and sequential workflow gates that practitioners face in production — across EU, UK, and Indian regulatory contexts.
 
@@ -315,7 +315,6 @@ This makes DSAR-OpenEnv suitable for:
 ```
 rl-hack/
 ├── README.md                   ← This file
-├── inference.py                ← Root-level entrypoint for validators
 └── dsar_env/
     ├── inference.py            ← Baseline agent (LLM loop, all 3 tasks)
     ├── models.py               ← Pydantic action + observation schemas
@@ -502,7 +501,7 @@ DSAR-OpenEnv was built around three convictions:
 
 <div align="center">
 
-Built for the OpenEnv Hackathon · Privacy compliance RL · GDPR/UK GDPR workflow simulation
+Built for the OpenEnv Hackathon · Privacy compliance RL · GDPR/UK GDPR/DPDP Act workflow simulation
 
 *Making AI agents accountable to real legal obligations.*
 
