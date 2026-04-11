@@ -60,7 +60,7 @@ def log_step(step: int, action: str, reward: float, done: bool, error: Optional[
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     print(
-        f"[END] success={str(success).lower()} steps={steps} score={_printed_score(score):.2f} rewards={rewards_str}",
+        f"[END] success={str(success).lower()} steps={steps} score={_printed_score(score):.3f} rewards={rewards_str}",
         flush=True,
     )
 
@@ -82,6 +82,17 @@ def _stdout_atom(value: object | None) -> str:
 def _printed_score(value: float) -> float:
     """Clamp displayed score so 2-decimal formatting stays strictly inside (0, 1)."""
     return max(0.01, min(0.99, float(value)))
+
+
+def _prompt_value(value: object) -> str:
+    """Render long structured values more compactly for the baseline prompt."""
+    if isinstance(value, list):
+        if value and all(isinstance(item, dict) for item in value):
+            return json.dumps(value[:2], default=str) + (" ..." if len(value) > 2 else "")
+        return json.dumps(value[:4], default=str) + (" ..." if len(value) > 4 else "")
+    if isinstance(value, dict):
+        return json.dumps(value, default=str)
+    return str(value)
 
 
 def _parse_task_seed_map(raw_value: str | None) -> dict[str, int]:
@@ -150,11 +161,17 @@ MAX_TOKENS = 512
 MAX_STEPS = 30
 EPISODE_SEED = _parse_optional_int(os.environ.get("EPISODE_SEED"))
 TASK_SEED_MAP = _parse_task_seed_map(
-    os.environ.get("DSAR_TASK_SEEDS", "task_easy:7,task_medium:3,task_hard:31")
+    os.environ.get(
+        "DSAR_TASK_SEEDS",
+        "task_easy:7,task_medium:3,task_adversarial_identity:19,task_hard:19,task_breach_embedded:14",
+    )
 )
 TASK_IDS = [
     task.strip()
-    for task in os.environ.get("DSAR_TASKS", "task_easy,task_medium,task_hard").split(",")
+    for task in os.environ.get(
+        "DSAR_TASKS",
+        "task_easy,task_medium,task_adversarial_identity,task_hard,task_breach_embedded",
+    ).split(",")
     if task.strip()
 ]
 TRACE_ENABLED = os.environ.get("DSAR_TRACE", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -193,18 +210,30 @@ Available actions:
 - classify_field <field_id> disclose
 - classify_field <field_id> withhold
 - verify_identity <transaction_date|account_reference|registered_postcode|passport_copy|photo_id>
+- flag_adversarial <reason>
+- flag_breach_signal <reason>
+- notify_regulator <reason>
+- notify_requester <reason>
 - redact_span <ticket_id> <sentence_index> <keep|redact>
 - process_message <msg_id> <disclose|partial_redact|exclude|escalate>
 - redact_sentence <msg_id> <sentence_index> <keep|redact>
 - escalate_with_reason <msg_id> <reason_code> :: <reason>
+- file_remediation_note <reason>
+- justify_verification_method <reason>
+- file_redaction_remediation <reason>
 - compile_response
 
 Rules:
 - For task_easy, query both silos before classifying fields.
 - For task_medium identity, use a proportionate verification method.
 - For task_medium redaction, process each sentence once and only compile when all are done.
+- For task_medium redaction, support-authored sentences can still be requester-owned if they explain the requester's account, access path, billing issue, cancellation timing, or service continuity.
+- For task_adversarial_identity, query both silos before resolving the case.
+- For task_adversarial_identity, verify genuine requests proportionately and only use flag_adversarial when evidence shows concrete inconsistencies.
 - For task_hard, never use query_silo, classify_field, verify_identity, or redact_span.
 - For task_hard, use the observation state to determine which action type is currently valid.
+- When filing remediation or justification notes, mention the specific compliance issue briefly and concretely.
+- For task_hard escalations, mention special-category, health, legal balancing, or human-review need in the reason text.
 - Never repeat the same silo query or sentence decision.
 - Respond with only the action text."""
 
@@ -268,15 +297,15 @@ def trace(title: str, payload: object | None = None) -> None:
         print(payload, file=sys.stderr)
         return
 
-
-def _clamp_task_score(value: float) -> float:
-    """Clamp reported task scores into the open interval (0, 1)."""
-    return round(max(MIN_VALID_TASK_SCORE, min(MAX_VALID_TASK_SCORE, value)), 4)
-
     try:
         print(json.dumps(payload, indent=2, ensure_ascii=True, default=str), file=sys.stderr)
     except TypeError:
         print(str(payload), file=sys.stderr)
+
+
+def _clamp_task_score(value: float) -> float:
+    """Clamp reported task scores into the open interval (0, 1)."""
+    return round(max(MIN_VALID_TASK_SCORE, min(MAX_VALID_TASK_SCORE, value)), 4)
 
 
 def merged_metadata(step_data: dict, observation: dict) -> dict:
@@ -324,6 +353,47 @@ def _case3_pending_escalation_ids(obs: dict) -> list[str]:
 
 
 def _action_params_allowed(action_dict: dict, obs: dict) -> bool:
+    if obs.get("task_id") == "task_easy":
+        if action_dict.get("action_type") == "classify_field":
+            pending_ids = set(_case1_pending_field_ids(obs))
+            return action_dict.get("field_id") in pending_ids
+        if action_dict.get("action_type") == "file_remediation_note":
+            return obs.get("required_followup_action") == "file_remediation_note"
+        return True
+
+    if obs.get("task_id") == "task_medium":
+        if action_dict.get("action_type") == "redact_span":
+            pending_targets = _case2_pending_sentence_targets(obs)
+            ticket_id = action_dict.get("ticket_id")
+            sentence_index = action_dict.get("sentence_index")
+            return ticket_id in pending_targets and sentence_index in set(pending_targets.get(ticket_id, []))
+        if action_dict.get("action_type") in {"justify_verification_method", "file_redaction_remediation"}:
+            return obs.get("required_followup_action") == action_dict.get("action_type")
+        return True
+
+    if obs.get("task_id") == "task_adversarial_identity":
+        action_type = action_dict.get("action_type")
+        if action_type == "file_remediation_note":
+            return obs.get("required_followup_action") == "file_remediation_note"
+        if action_type == "compile_response":
+            return bool(obs.get("compile_ready"))
+        if action_type == "flag_adversarial":
+            return bool(action_dict.get("reason"))
+        return True
+
+    if obs.get("task_id") == "task_breach_embedded":
+        action_type = action_dict.get("action_type")
+        if action_type == "classify_field":
+            pending_ids = set(_case1_pending_field_ids(obs))
+            return action_dict.get("field_id") in pending_ids
+        if action_type == "file_remediation_note":
+            return obs.get("required_followup_action") == "file_remediation_note"
+        if action_type == "compile_response":
+            return bool(obs.get("compile_ready"))
+        if action_type in {"flag_breach_signal", "notify_regulator", "notify_requester"}:
+            return bool(action_dict.get("reason"))
+        return True
+
     if obs.get("task_id") != "task_hard":
         return True
 
@@ -339,6 +409,8 @@ def _action_params_allowed(action_dict: dict, obs: dict) -> bool:
         return action_dict.get("msg_id") in set(_case3_pending_escalation_ids(obs))
     if action_type == "compile_response":
         return bool(obs.get("compile_ready"))
+    if action_type == "file_remediation_note":
+        return obs.get("required_followup_action") == "file_remediation_note"
     return True
 
 
@@ -384,6 +456,37 @@ def _case3_processed_messages(obs: dict) -> dict:
     return obs.get("processed_messages", {}) or {}
 
 
+def _case1_pending_field_ids(obs: dict) -> list[str]:
+    classified = set(obs.get("classified_fields", []) or [])
+    pending = []
+    for item in obs.get("customer_record", []) or []:
+        field_id = item.get("field_id") if isinstance(item, dict) else getattr(item, "field_id", None)
+        if field_id and field_id not in classified:
+            pending.append(field_id)
+    return sorted(pending)
+
+
+def _case2_pending_sentence_targets(obs: dict) -> dict[str, list[int]]:
+    processed = obs.get("processed_sentences", {}) or {}
+    pending: dict[str, list[int]] = {}
+    for ticket in obs.get("tickets", []) or []:
+        ticket_id = ticket.get("ticket_id") if isinstance(ticket, dict) else getattr(ticket, "ticket_id", None)
+        if not ticket_id:
+            continue
+        done_indices = processed.get(ticket_id, {}) or {}
+        unresolved = []
+        messages = ticket.get("messages", []) if isinstance(ticket, dict) else getattr(ticket, "messages", [])
+        for message in messages:
+            sentences = message.get("sentences", []) if isinstance(message, dict) else getattr(message, "sentences", [])
+            for sentence in sentences:
+                idx = sentence.get("sentence_index") if isinstance(sentence, dict) else getattr(sentence, "sentence_index", None)
+                if idx is not None and idx not in done_indices and str(idx) not in done_indices:
+                    unresolved.append(idx)
+        if unresolved:
+            pending[ticket_id] = sorted(unresolved)
+    return pending
+
+
 def _case3_users(obs: dict) -> dict:
     return obs.get("users_json", {}) or {}
 
@@ -408,11 +511,34 @@ def _extract_terminal_metrics(meta: dict, observation: dict) -> dict:
         "n_pii_breaches",
         "privacy_penalty",
         "task3_score",
+        "task4_score",
+        "task5_score",
+        "field_score",
+        "breach_detection",
+        "notification_completeness",
+        "proportionality_discipline",
+        "resolution_accuracy",
+        "evidence_discipline",
+        "proportionality",
+        "incorrect_resolution_type",
+        "is_adversarial_episode",
+        "has_breach_episode",
+        "breach_detected",
+        "regulator_notified",
+        "requester_notified",
         "failure_summary",
         "message_diagnostics",
         "incorrect_message_ids",
         "constraint_violated",
         "schema_gate",
+        "diagnosis_score",
+        "diagnosis_actions_count",
+        "diagnosis_applied",
+        "scenario_variant",
+        "difficulty_tier",
+        "difficulty_profile_summary",
+        "episode_safety_cost",
+        "constraint_event_count",
     ]
     terminal_metrics = {key: meta.get(key) for key in preferred_keys if key in meta}
     if terminal_metrics:
@@ -429,6 +555,19 @@ def _extract_terminal_metrics(meta: dict, observation: dict) -> dict:
             return extracted
 
     return {}
+
+
+def _classify_provider_error(error_text: str) -> str:
+    lowered = error_text.lower()
+    if "401" in lowered or "expired" in lowered or "invalid api key" in lowered or "access token" in lowered:
+        return "auth_error"
+    if "429" in lowered or "rate limit" in lowered:
+        return "rate_limited"
+    if "model" in lowered and "not found" in lowered:
+        return "unknown_model"
+    if "timeout" in lowered or "timed out" in lowered:
+        return "provider_timeout"
+    return "provider_error"
 
 
 def _case3_requester_user_id(obs: dict) -> str | None:
@@ -609,6 +748,7 @@ def choose_task_hard_action(obs: dict) -> dict | None:
 def parse_model_action(response_text: str) -> dict:
     """Parse the LLM's text response into a structured action dict."""
     text = response_text.strip()
+    text = re.sub(r"\s+\[[^\]]+\]\s*$", "", text)
 
     match = re.search(r"query_silo\s+(\w+)", text, re.IGNORECASE)
     if match:
@@ -630,6 +770,18 @@ def parse_model_action(response_text: str) -> dict:
         }
 
     match = re.search(
+        r"classify_field\s+\[([\w_]+)\]\s+(disclose|withhold)",
+        text,
+        re.IGNORECASE,
+    )
+    if match:
+        return {
+            "action_type": "classify_field",
+            "field_id": match.group(1).lower(),
+            "decision": match.group(2).lower(),
+        }
+
+    match = re.search(
         r"verify_identity\s+(transaction_date|account_reference|registered_postcode|passport_copy|photo_id)",
         text,
         re.IGNORECASE,
@@ -638,6 +790,50 @@ def parse_model_action(response_text: str) -> dict:
         return {
             "action_type": "verify_identity",
             "verification_method": match.group(1).lower(),
+        }
+
+    match = re.search(
+        r"flag_adversarial\s+(.+)$",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if match:
+        return {
+            "action_type": "flag_adversarial",
+            "reason": match.group(1).strip(),
+        }
+
+    match = re.search(
+        r"flag_breach_signal\s+(.+)$",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if match:
+        return {
+            "action_type": "flag_breach_signal",
+            "reason": match.group(1).strip(),
+        }
+
+    match = re.search(
+        r"notify_regulator\s+(.+)$",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if match:
+        return {
+            "action_type": "notify_regulator",
+            "reason": match.group(1).strip(),
+        }
+
+    match = re.search(
+        r"notify_requester\s+(.+)$",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if match:
+        return {
+            "action_type": "notify_requester",
+            "reason": match.group(1).strip(),
         }
 
     match = re.search(
@@ -679,6 +875,17 @@ def parse_model_action(response_text: str) -> dict:
         }
 
     match = re.search(
+        r"(file_remediation_note|justify_verification_method|file_redaction_remediation)\s+(.+)$",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if match:
+        return {
+            "action_type": match.group(1).lower(),
+            "reason": match.group(2).strip(),
+        }
+
+    match = re.search(
         r"escalate_with_reason\s+([A-Za-z0-9_-]+)\s+([A-Za-z0-9_]+)\s+::\s+(.+)$",
         text,
         re.IGNORECASE | re.DOTALL,
@@ -694,7 +901,7 @@ def parse_model_action(response_text: str) -> dict:
     if re.search(r"compile_response", text, re.IGNORECASE):
         return {"action_type": "compile_response"}
 
-    return {"action_type": "compile_response"}
+    return {"action_type": "__parse_error__", "raw": text}
 
 
 def format_observation(obs: dict) -> str:
@@ -709,8 +916,24 @@ def format_observation(obs: dict) -> str:
 
     parts.append(f"Task: {task_id}")
     parts.append(f"Phase: {phase}")
+    if obs.get("workflow_state"):
+        parts.append(f"Workflow state: {obs.get('workflow_state')}")
     parts.append(f"Steps remaining: {steps_remaining}")
-    if task_id in {"task_easy", "task_medium"}:
+    if obs.get("current_compliance_state") is not None:
+        parts.append(f"Compliance state: {obs.get('current_compliance_state')}")
+    if obs.get("required_followup_action"):
+        parts.append(f"Required follow-up action: {obs.get('required_followup_action')}")
+    if obs.get("last_action_outcome"):
+        parts.append(f"Last action outcome: {obs.get('last_action_outcome')}")
+    if obs.get("state_change_message"):
+        parts.append(f"State change: {obs.get('state_change_message')}")
+    if obs.get("step_safety_cost") is not None:
+        parts.append(f"Step safety cost: {obs.get('step_safety_cost')}")
+    if obs.get("episode_safety_cost") is not None:
+        parts.append(f"Episode safety cost: {obs.get('episode_safety_cost')}")
+    if obs.get("constraint_events"):
+        parts.append(f"Constraint events logged: {len(obs.get('constraint_events', []))}")
+    if task_id in {"task_easy", "task_medium", "task_breach_embedded"}:
         if silos_queried:
             parts.append(f"Silos already queried: {', '.join(silos_queried)}")
         else:
@@ -750,6 +973,43 @@ def format_observation(obs: dict) -> str:
             "registered_postcode, passport_copy, photo_id"
         )
 
+    if task_id == "task_adversarial_identity":
+        parts.append(
+            "\n=== ADVERSARIAL IDENTITY REVIEW ===\n"
+            f"Confidence: {obs.get('identity_confidence', 0.0):.2f} / "
+            f"{obs.get('identity_threshold', 0.0):.2f}"
+        )
+        submitted_identity = obs.get("submitted_identity", {})
+        internal_identity = obs.get("internal_identity", {})
+        if submitted_identity:
+            parts.append(f"Submitted identity: {json.dumps(submitted_identity, default=str)}")
+        if internal_identity:
+            parts.append(f"Visible internal identity evidence: {json.dumps(internal_identity, default=str)}")
+        parts.append(
+            "Available verification methods: transaction_date, account_reference, "
+            "registered_postcode, passport_copy, photo_id"
+        )
+        parts.append(
+            "Adversarial reminder: query both silos first, do not verify before evidence, "
+            "and do not flag adversarial on one weak mismatch alone."
+        )
+
+    if task_id == "task_breach_embedded":
+        parts.append("\n=== BREACH-EMBEDDED REVIEW ===")
+        parts.append(f"Compile ready: {str(obs.get('compile_ready', False)).lower()}")
+        parts.append(f"Breach detected: {str(obs.get('breach_detected', False)).lower()}")
+        parts.append(f"Regulator notified: {str(obs.get('regulator_notified', False)).lower()}")
+        parts.append(f"Requester notified: {str(obs.get('requester_notified', False)).lower()}")
+        if obs.get("breach_scope_fields"):
+            parts.append(
+                "Known breach scope fields: "
+                + ", ".join(obs.get("breach_scope_fields", []))
+            )
+        if obs.get("required_followup_action"):
+            parts.append(
+                "Recovery reminder: finish the required remediation action before resuming DSAR or breach workflow steps."
+            )
+
     if task_id == "task_medium" and phase == "redaction":
         parts.append("\n=== REDACTION TICKETS ===")
         processed = obs.get("processed_sentences", {})
@@ -766,6 +1026,10 @@ def format_observation(obs: dict) -> str:
         parts.append(
             "Redaction reminder: keep requester issue/account/access/subscription explanations; "
             "redact staff contact details and internal workflow/process notes."
+        )
+        parts.append(
+            "Medium-task reminder: support-authored sentences can still belong to the requester if they describe the requester's account, "
+            "service continuity, billing dispute, cancellation timing, or access path."
         )
         for ticket in tickets:
             ticket_id = ticket.get("ticket_id", "unknown")
@@ -796,9 +1060,6 @@ def format_observation(obs: dict) -> str:
 
     if task_id == "task_hard":
         parts.append("\n=== CASE 3 SLACK TRIAGE ===")
-        parts.append(
-            "These six Slack messages are the candidate responsive set already surfaced from the broader export."
-        )
         users_json = obs.get("users_json", {})
         if users_json:
             parts.append(f"Users JSON: {json.dumps(users_json, default=str)}")
@@ -832,7 +1093,6 @@ def format_observation(obs: dict) -> str:
             if isinstance(message, dict):
                 msg_id = message.get("msg_id", "unknown")
                 user = message.get("user", "unknown")
-                text = message.get("text", "")
                 ts = message.get("ts", "")
                 thread_ts = message.get("thread_ts")
                 subtype = message.get("subtype")
@@ -840,7 +1100,6 @@ def format_observation(obs: dict) -> str:
             else:
                 msg_id = getattr(message, "msg_id", "unknown")
                 user = getattr(message, "user", "unknown")
-                text = getattr(message, "text", "")
                 ts = getattr(message, "ts", "")
                 thread_ts = getattr(message, "thread_ts", None)
                 subtype = getattr(message, "subtype", None)
@@ -856,7 +1115,6 @@ def format_observation(obs: dict) -> str:
             if subtype:
                 header += f" | subtype={subtype}"
             parts.append(header)
-            parts.append(f"  Text: {text}")
             for sentence in sentences:
                 if isinstance(sentence, dict):
                     idx = sentence.get("sentence_idx", -1)
@@ -895,7 +1153,7 @@ def format_observation(obs: dict) -> str:
         if field_id not in classified:
             pending_fields.append(item)
 
-    if task_id == "task_easy" and pending_fields:
+    if task_id in {"task_easy", "task_breach_embedded"} and pending_fields:
         parts.append(
             f"\n=== PENDING FIELDS - CLASSIFY THESE ({len(pending_fields)} remaining) ==="
         )
@@ -912,7 +1170,7 @@ def format_observation(obs: dict) -> str:
                 field_description = getattr(item, "field_description", "")
 
             value_str = (
-                json.dumps(field_value, default=str)
+                _prompt_value(field_value)
                 if not isinstance(field_value, str)
                 else field_value
             )
@@ -923,7 +1181,15 @@ def format_observation(obs: dict) -> str:
             )
     elif task_id == "task_easy" and customer_record:
         parts.append("\nAll fields classified. Call compile_response now.")
-    elif task_id == "task_easy":
+    elif task_id == "task_breach_embedded" and customer_record:
+        if obs.get("compile_ready"):
+            parts.append("\nAll compact DSAR fields are classified and the breach workflow is complete. Call compile_response now.")
+        else:
+            parts.append(
+                "\nAll currently visible compact DSAR fields are classified. "
+                "If compile_response is still unavailable, finish the remaining breach workflow step."
+            )
+    elif task_id in {"task_easy", "task_breach_embedded"}:
         parts.append("\n=== NO FIELDS REVEALED YET ===")
         parts.append(
             "Query billing and crm to reveal the customer record before classifying anything."
@@ -956,6 +1222,7 @@ def run_episode(env_url: str, task_id: str, episode_seed: int | None = None) -> 
     terminal_metrics: dict = {}
     rewards_list: List[float] = []
     steps_taken = 0
+    last_provider_error: str | None = None
 
     try:
         trace("RESET REQUEST", {"url": f"{env_url}/reset", "json": reset_payload})
@@ -1020,7 +1287,16 @@ def run_episode(env_url: str, task_id: str, episode_seed: int | None = None) -> 
                             },
                         )
                     except Exception as exc:
+                        last_provider_error = str(exc)
                         response_text = FALLBACK_ACTION
+                        trace(
+                            "MODEL PROVIDER ERROR",
+                            {
+                                "attempt": attempt,
+                                "classification": _classify_provider_error(last_provider_error),
+                                "error": last_provider_error,
+                            },
+                        )
                         trace(
                             "RAW MODEL RESPONSE",
                             {
@@ -1057,9 +1333,23 @@ def run_episode(env_url: str, task_id: str, episode_seed: int | None = None) -> 
                     ]
                     trace("ACTION VALIDATION RETRY", trace_payload)
                 else:
+                    trace(
+                        "MODEL FAILURE SUMMARY",
+                        {
+                            "task_id": task_id,
+                            "available_actions": available_actions,
+                            "last_provider_error": last_provider_error,
+                            "provider_error_classification": (
+                                _classify_provider_error(last_provider_error)
+                                if last_provider_error
+                                else None
+                            ),
+                        },
+                    )
                     raise RuntimeError(
                         "Model did not produce a valid action type after "
-                        f"{MODEL_ACTION_MAX_RETRIES} attempts. Allowed: {available_actions}"
+                        f"{MODEL_ACTION_MAX_RETRIES} attempts. Allowed: {available_actions}. "
+                        f"Last provider error: {last_provider_error or 'none'}"
                     )
             action_dict["metadata"] = {"episode_id": episode_id}
             trace("PARSED ACTION", action_dict)
@@ -1086,7 +1376,10 @@ def run_episode(env_url: str, task_id: str, episode_seed: int | None = None) -> 
                     f"{action_dict.get('decision', '')}"
                 )
             if action_dict.get("reason") is not None:
-                action_str += f" {action_dict.get('reason_code', '')} :: {action_dict['reason']}"
+                if action_dict["action_type"] == "escalate_with_reason":
+                    action_str += f" {action_dict.get('reason_code', '')} :: {action_dict['reason']}"
+                else:
+                    action_str += f" {action_dict['reason']}"
             trace("STEP REQUEST", {"url": f"{env_url}/step", "json": {"action": action_dict}})
 
             step_resp = requests.post(
@@ -1168,6 +1461,7 @@ def main() -> None:
                     result = run_episode(env_url, task_id, episode_seed=_parse_optional_int(seed_value))
                     task_scores.append(result)
                 except Exception as exc:
+                    trace("TASK RUN FAILURE", {"task_id": task_id, "seed": seed_value, "error": str(exc)})
                     task_scores.append(
                         {
                             "task_id": task_id,
@@ -1186,7 +1480,8 @@ def main() -> None:
             episode_seed = TASK_SEED_MAP.get(task_id, EPISODE_SEED)
             result = run_episode(env_url, task_id, episode_seed=episode_seed)
             scores[task_id] = result["score"]
-        except Exception:
+        except Exception as exc:
+            trace("TASK RUN FAILURE", {"task_id": task_id, "error": str(exc)})
             scores[task_id] = 0.0
 
 

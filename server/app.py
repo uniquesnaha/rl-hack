@@ -13,7 +13,7 @@ try:
 except ImportError:
     from openenv.core.env_server.http_server import create_app
 
-from dsar_env.models import DSARAction, DSARObservation
+from models import DSARAction, DSARObservation
 from .dsar_environment import DSAREnvironment
 
 # Create the app using OpenEnv's factory helper.
