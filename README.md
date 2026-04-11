@@ -1,3 +1,16 @@
+---
+title: Dsar Env Environment Server
+emoji: 🔊
+colorFrom: blue
+colorTo: green
+sdk: docker
+pinned: false
+app_port: 8000
+base_path: /web
+tags:
+  - openenv
+---
+
 # AutoDSAR
 
 AutoDSAR is a deterministic OpenEnv environment for training agents on safety-critical privacy operations around Data Subject Access Requests (DSARs).
