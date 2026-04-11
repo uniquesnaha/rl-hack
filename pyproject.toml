@@ -24,9 +24,9 @@ dev = [
 ]
 
 [project.scripts]
-server = "dsar_env.server.app:main"
+server = "server.app:main"
 
 [tool.setuptools]
 include-package-data = true
-packages = ["dsar_env", "dsar_env.server"]
-package-dir = { "dsar_env" = ".", "dsar_env.server" = "server" }
+packages = ["server"]
+py-modules = ["client", "inference", "models"]

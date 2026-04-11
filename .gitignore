@@ -9,13 +9,13 @@ __pycache__/
 *.py[cod]
 *.pyo
 *.pyc
-
+tests/
 # Package/build artifacts
 *.egg-info/
 dist/
 build/
 *.egg
-
+.omx/
 # Test cache
 .pytest_cache/
 .coverage
@@ -37,3 +37,5 @@ Thumbs.db
 # Temp debug scripts
 test_rewards.py
 openenv_obs_source.txt
+/.dsar_env
+dsar_env/

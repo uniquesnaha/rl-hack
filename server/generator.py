@@ -19,6 +19,13 @@ from .constants import (
     BILLING_DISPUTE_REASONS,
     CANCELLATION_REASONS,
     CASE1_DSAR_TEMPLATE,
+    CASE5_COMPACT_INTERNAL_FIELDS,
+    CASE5_COMPACT_REQUESTER_FIELDS,
+    CASE5_SIGNAL_ACCOUNT_REFERENCE,
+    CASE5_SIGNAL_ADDRESS_TARGETING,
+    CASE5_SIGNAL_FORUM_EXPOSURE,
+    CASE5_SIGNAL_PHISHING_EMAIL,
+    CASE5_SIGNAL_VARIANTS,
     CASE3_ACTION_DISCLOSE,
     CASE3_ACTION_ESCALATE,
     CASE3_ACTION_EXCLUDE,
@@ -34,6 +41,10 @@ from .constants import (
     CASE2_SENTENCE_LABEL_PII,
     CASE2_SENTENCE_LABEL_REQUESTER,
     CASE2_VERIFICATION_THRESHOLD,
+    CASE4_SPOOFING_PATTERNS,
+    DIFFICULTY_TIER_HIGH,
+    DIFFICULTY_TIER_LOW,
+    DIFFICULTY_TIER_MEDIUM,
     CITIES_WITH_POSTCODES,
     EMPLOYEE_NAMES,
     EMAIL_DOMAINS,
@@ -115,6 +126,32 @@ def _make_request_date(rng: random.Random) -> str:
     return (start + timedelta(days=rng.randint(0, days_range))).isoformat()
 
 
+def _choose_variant(rng: random.Random, variants: Tuple[str, ...]) -> str:
+    return rng.choice(list(variants))
+
+
+def _refresh_message_text(message: Dict[str, Any]) -> None:
+    message["text"] = " ".join(sentence["text"] for sentence in message.get("sentences", []))
+
+
+def _normalize_difficulty_tier(difficulty_tier: Optional[str], *, default: str) -> str:
+    if difficulty_tier in {DIFFICULTY_TIER_LOW, DIFFICULTY_TIER_MEDIUM, DIFFICULTY_TIER_HIGH}:
+        return difficulty_tier
+    return default
+
+
+def case1_variant_for_seed(seed: Optional[int] = None, difficulty_tier: Optional[str] = None) -> str:
+    rng = random.Random(seed)
+    return _choose_variant(
+        rng,
+        (
+            "standard_saas_customer",
+            "financial_services_customer",
+            "healthcare_adjacent_customer",
+        ),
+    )
+
+
 def _build_field_item(field_id: str, value: Any) -> Dict[str, Any]:
     metadata = FIELD_METADATA.get(field_id)
     if metadata is None:
@@ -167,10 +204,142 @@ def _build_structured_case_values(
     return values
 
 
+def _build_case5_structured_values(
+    full_name: str,
+    email: str,
+    billing_address: str,
+    support_ticket_ids: List[str],
+    rng: random.Random,
+) -> Dict[str, Any]:
+    raw = _build_structured_case_values(
+        full_name=full_name,
+        email=email,
+        billing_address=billing_address,
+        support_ticket_ids=support_ticket_ids,
+        rng=rng,
+    )
+    compact_ids = set(CASE5_COMPACT_REQUESTER_FIELDS) | set(CASE5_COMPACT_INTERNAL_FIELDS)
+    return {field_id: raw[field_id] for field_id in compact_ids}
+
+
 def _build_customer_record(raw_values: Dict[str, Any], rng: random.Random) -> List[Dict[str, Any]]:
     customer_record = [_build_field_item(field_id, value) for field_id, value in raw_values.items()]
     rng.shuffle(customer_record)
     return customer_record
+
+
+def _apply_case1_variant(
+    variant: str,
+    raw_values: Dict[str, Any],
+    full_name: str,
+    rng: random.Random,
+) -> Tuple[Dict[str, str], str]:
+    description_overrides: Dict[str, str] = {}
+    dsar_suffix = ""
+
+    if variant == "financial_services_customer":
+        raw_values["subscription_plan"] = "Portfolio Intelligence Suite"
+        raw_values["product_usage_summary"] = f"generated_{rng.randint(4, 18)}_portfolio_reports_last_month"
+        raw_values["account_manager_notes"] = (
+            f"{full_name} requested faster reconciliation on portfolio exports tied to quarterly investor reporting."
+        )
+        raw_values["lead_source_tag"] = "channel_partner_finance"
+        description_overrides = {
+            "payment_history": "Payment and invoice events associated with the regulated reporting workspace.",
+            "risk_score": "Internal financial abuse heuristic used to calibrate fraud and chargeback review.",
+            "account_manager_notes": "Commercial servicing note used by the enterprise success team during renewal strategy.",
+        }
+        dsar_suffix = (
+            "\n\nThis request relates to my portfolio reporting workspace and related subscription billing records."
+        )
+    elif variant == "healthcare_adjacent_customer":
+        raw_values["subscription_plan"] = "Care Operations Workspace"
+        raw_values["product_usage_summary"] = f"generated_{rng.randint(6, 20)}_care_coordination_exports_last_month"
+        raw_values["account_manager_notes"] = (
+            f"{full_name} asked about audit-readiness reporting for care coordination teams and shared access governance."
+        )
+        raw_values["lead_source_tag"] = "healthcare_ops_webinar"
+        description_overrides = {
+            "support_ticket_ids": "Support case references linked to care-operations onboarding and audit export issues.",
+            "customer_health_score": "Internal retention-health score for a healthcare-adjacent operations workspace.",
+            "account_manager_notes": "Internal servicing note describing procurement, onboarding, and operational-readiness concerns.",
+        }
+        dsar_suffix = (
+            "\n\nMy account is linked to a care-operations workflow, so please include any subscription and service records tied to that workspace."
+        )
+    else:
+        description_overrides = {
+            "product_usage_summary": "Summary of ordinary SaaS product activity linked to the requester account.",
+        }
+
+    return description_overrides, dsar_suffix
+
+
+def _apply_case1_description_overrides(
+    customer_record: List[Dict[str, Any]],
+    description_overrides: Dict[str, str],
+) -> None:
+    if not description_overrides:
+        return
+    for item in customer_record:
+        override = description_overrides.get(item["field_id"])
+        if override:
+            item["field_description"] = override
+
+
+def case1_difficulty_profile_for_tier(difficulty_tier: Optional[str] = None) -> Dict[str, Any]:
+    difficulty_tier = _normalize_difficulty_tier(difficulty_tier, default=DIFFICULTY_TIER_LOW)
+    return {
+        "ambiguity": difficulty_tier,
+        "tempting_internal_fields": 1 if difficulty_tier == DIFFICULTY_TIER_LOW else (2 if difficulty_tier == DIFFICULTY_TIER_MEDIUM else 3),
+        "description_clarity": "high" if difficulty_tier == DIFFICULTY_TIER_LOW else ("balanced" if difficulty_tier == DIFFICULTY_TIER_MEDIUM else "low"),
+    }
+
+
+def _apply_case1_difficulty(
+    difficulty_tier: str,
+    customer_record: List[Dict[str, Any]],
+    raw_values: Dict[str, Any],
+    rng: random.Random,
+) -> Dict[str, Any]:
+    profile = case1_difficulty_profile_for_tier(difficulty_tier)
+
+    for item in customer_record:
+        if difficulty_tier == DIFFICULTY_TIER_LOW and item["field_id"] in {
+            "shard_routing_key",
+            "account_manager_notes",
+            "risk_score",
+            "customer_health_score",
+            "churn_probability",
+            "lead_source_tag",
+            "campaign_cpa",
+        }:
+            item["field_description"] = "Internal-only company data. Do not disclose to the requester."
+        elif difficulty_tier == DIFFICULTY_TIER_HIGH and item["field_id"] == "risk_score":
+            item["field_description"] = (
+                "A score used during account review and stability assessment over recent service activity."
+            )
+        elif difficulty_tier == DIFFICULTY_TIER_HIGH and item["field_id"] == "lead_source_tag":
+            item["field_description"] = (
+                "An acquisition label attached during internal review of how the account first entered the service."
+            )
+        elif difficulty_tier == DIFFICULTY_TIER_HIGH and item["field_id"] == "account_manager_notes":
+            item["field_description"] = (
+                "Free-text operational servicing note recorded during account planning and relationship review."
+            )
+
+    if difficulty_tier == DIFFICULTY_TIER_HIGH:
+        raw_values["account_manager_notes"] = (
+            "Discussion of renewal planning, team growth, and internal servicing posture for the account."
+        )
+    elif difficulty_tier == DIFFICULTY_TIER_LOW:
+        raw_values["account_manager_notes"] = (
+            "Internal commercial strategy note for the account team only."
+        )
+        raw_values["lead_source_tag"] = "internal_marketing_attribution_only"
+        raw_values["campaign_cpa"] = round(rng.uniform(18.0, 42.0), 2)
+
+    return profile
 
 
 def _variant_postcode(postcode: str, rng: random.Random) -> str:
@@ -249,6 +418,18 @@ def _customer_name_variation(base_name: str, rng: random.Random) -> str:
         f"{first[0]}. {normalized_last}",
     ]
     return rng.choice(variants)
+
+
+def _single_char_name_miss(name: str) -> str:
+    parts = name.split()
+    if not parts:
+        return name
+    last = parts[-1]
+    if not last:
+        return name
+    replacement = "x" if last[-1].lower() != "x" else "z"
+    parts[-1] = last[:-1] + replacement
+    return " ".join(parts)
 
 
 def _submitted_email_variation(internal_email: str, name: str, rng: random.Random) -> str:
@@ -636,6 +817,386 @@ def _build_identity_scenario(
             "plausible_methods": [family, competing_family],
             "support_by_method": support_by_method,
         },
+    }
+
+
+def _apply_case2_variant(
+    variant: str,
+    identity: Dict[str, Any],
+    tickets: List[Dict[str, Any]],
+    rng: random.Random,
+) -> str:
+    dsar_suffix = ""
+
+    if variant == "corporate_to_personal_email_loss":
+        identity["submitted_identity"]["email"] = _make_email(identity["internal_identity_full"]["full_name"], rng)
+        dsar_suffix = (
+            "\n\nI no longer have access to my former company email, so I am writing from my personal address instead."
+        )
+        for ticket in tickets:
+            customer_message = next((msg for msg in ticket["messages"] if msg["speaker"] == "customer"), None)
+            if customer_message and customer_message.get("sentences"):
+                customer_message["sentences"][0]["text"] = (
+                    "I lost access to the old work inbox after leaving my previous employer. "
+                    + customer_message["sentences"][0]["text"]
+                )
+                _refresh_message_text(customer_message)
+    elif variant == "near_match_identity_support_case":
+        name_parts = identity["internal_identity_full"]["full_name"].split()
+        if len(name_parts) >= 2:
+            identity["submitted_identity"]["full_name"] = f"{name_parts[0][0]}. {name_parts[-1]}"
+        identity["submitted_identity"]["billing_address"] = _address_variation(
+            identity["internal_identity_full"]["billing_address"].split(",")[0].strip(),
+            identity["internal_identity_full"]["billing_address"].split(",")[1].strip(),
+            identity["internal_identity_full"]["billing_address"].split(",")[2].strip(),
+            rng,
+            "registered_postcode",
+        )
+        identity["starting_identity_confidence"] = round(
+            max(0.35, min(0.55, identity["starting_identity_confidence"] - 0.05)),
+            2,
+        )
+        dsar_suffix = (
+            "\n\nMy older records may show a slightly different name formatting and a near-match mailing address from a previous move."
+        )
+        for ticket in tickets:
+            support_message = next((msg for msg in ticket["messages"] if msg["speaker"] == "support"), None)
+            if support_message and support_message.get("sentences"):
+                support_message["sentences"][0]["text"] = (
+                    "The account review is still reconciling a near-match identity pattern across the support history. "
+                    + support_message["sentences"][0]["text"]
+                )
+                _refresh_message_text(support_message)
+    else:
+        dsar_suffix = (
+            "\n\nThe support tickets were opened while I was using a different contact address than the one currently on file."
+        )
+
+    return dsar_suffix
+
+
+def _apply_case2_difficulty(
+    difficulty_tier: str,
+    identity: Dict[str, Any],
+    tickets: List[Dict[str, Any]],
+    rng: random.Random,
+) -> Dict[str, Any]:
+    profile = {
+        "identity_ambiguity": difficulty_tier,
+        "redaction_ambiguity": difficulty_tier,
+    }
+
+    if difficulty_tier == DIFFICULTY_TIER_LOW:
+        identity["starting_identity_confidence"] = round(
+            min(0.6, identity["starting_identity_confidence"] + 0.07),
+            2,
+        )
+        for silo_payload in identity["internal_identity_masked"].values():
+            for note_key in (
+                "billing_review_note",
+                "billing_event_summary",
+                "workspace_location_note",
+                "workspace_ownership_note",
+            ):
+                if note_key in silo_payload:
+                    silo_payload[note_key] = "Strong match evidence. " + silo_payload[note_key]
+        for ticket in tickets:
+            support_message = next((msg for msg in ticket["messages"] if msg["speaker"] == "support"), None)
+            if support_message and support_message.get("sentences"):
+                support_message["sentences"][0]["text"] = (
+                    "Requester-owned account context: " + support_message["sentences"][0]["text"]
+                )
+                _refresh_message_text(support_message)
+    elif difficulty_tier == DIFFICULTY_TIER_MEDIUM:
+        identity["starting_identity_confidence"] = round(
+            min(0.58, identity["starting_identity_confidence"] + 0.03),
+            2,
+        )
+        for ticket in tickets:
+            for message in ticket["messages"]:
+                if message["speaker"] != "support":
+                    continue
+                if message.get("sentences"):
+                    first_sentence = message["sentences"][0]["text"]
+                    if "requester" not in first_sentence.lower() and "customer" not in first_sentence.lower():
+                        message["sentences"][0]["text"] = "Requester account context: " + first_sentence
+                        _refresh_message_text(message)
+    elif difficulty_tier == DIFFICULTY_TIER_HIGH:
+        identity["starting_identity_confidence"] = round(
+            max(0.35, identity["starting_identity_confidence"] - 0.07),
+            2,
+        )
+        for silo_payload in identity["internal_identity_masked"].values():
+            for note_key in (
+                "billing_review_note",
+                "billing_event_summary",
+                "workspace_location_note",
+                "workspace_ownership_note",
+            ):
+                if note_key in silo_payload:
+                    silo_payload[note_key] = silo_payload[note_key].replace("still", "").replace("The ", "", 1)
+        for ticket in tickets:
+            for message in ticket["messages"]:
+                if message["speaker"] != "support":
+                    continue
+                for sentence in message.get("sentences", []):
+                    if "requester" in sentence["text"].lower():
+                        sentence["text"] = sentence["text"].replace("requester", "account party")
+                _refresh_message_text(message)
+
+    return profile
+
+
+def _apply_adversarial_identity_pattern(
+    identity: Dict[str, Any],
+    spoofing_pattern: str,
+    difficulty_tier: str,
+    rng: random.Random,
+) -> tuple[set[str], str]:
+    submitted_identity = identity["submitted_identity"]
+    internal_full = identity["internal_identity_full"]
+    masked_billing = identity["internal_identity_masked"]["billing"]
+    masked_crm = identity["internal_identity_masked"]["crm"]
+
+    if spoofing_pattern == "near_miss_name":
+        submitted_identity["full_name"] = _single_char_name_miss(internal_full["full_name"])
+        masked_crm["security_review_note"] = (
+            "Name formatting only partially aligns with prior account recovery records."
+            if difficulty_tier != DIFFICULTY_TIER_LOW
+            else "The submitted name differs by one character from the historical account record."
+        )
+        return {"account_reference"}, "\n\nPlease handle this urgently due to a legal deadline."
+
+    if spoofing_pattern == "borrowed_postcode":
+        street, city, postcode = [part.strip() for part in internal_full["billing_address"].split(",")]
+        submitted_identity["billing_address"] = f"{_near_miss_street_variation(street, rng)}, {city}, {postcode}"
+        masked_billing["security_review_note"] = (
+            "Location evidence partially matches the account record but the street trail is not exact."
+            if difficulty_tier != DIFFICULTY_TIER_LOW
+            else "The postcode matches, but the street-level address does not exactly match the account record."
+        )
+        return {"registered_postcode"}, ""
+
+    if spoofing_pattern == "stale_transaction_date":
+        masked_billing["security_review_note"] = (
+            "The transaction reference being cited appears tied to an older archived billing cycle."
+            if difficulty_tier != DIFFICULTY_TIER_LOW
+            else "The only matching transaction evidence comes from an older archived billing cycle."
+        )
+        return {"transaction_date"}, ""
+
+    if spoofing_pattern == "urgency_pressure":
+        masked_crm["security_review_note"] = (
+            "The contact pattern carries urgency language that does not align with ordinary account recovery behaviour."
+            if difficulty_tier != DIFFICULTY_TIER_LOW
+            else "The request uses unusual urgency pressure inconsistent with normal account recovery requests."
+        )
+        return {"account_reference"}, "\n\nThis is urgent and I need the response immediately because counsel is waiting."
+
+    submitted_identity["full_name"] = _single_char_name_miss(internal_full["full_name"])
+    street, city, postcode = [part.strip() for part in internal_full["billing_address"].split(",")]
+    submitted_identity["billing_address"] = f"{_near_miss_street_variation(street, rng)}, {city}, {postcode}"
+    masked_billing["security_review_note"] = (
+        "Several identity signals partially align, but the overall pattern remains inconsistent."
+        if difficulty_tier != DIFFICULTY_TIER_LOW
+        else "Multiple identity signals only partially match the historical account record."
+    )
+    masked_crm["security_review_note"] = (
+        "The identity trail combines plausible fragments but does not look like a clean continuity match."
+    )
+    return {"account_reference", "registered_postcode"}, "\n\nPlease process this quickly because of an urgent legal deadline."
+
+
+def generate_case4_adversarial_identity_episode(
+    seed: Optional[int] = None,
+    difficulty_tier: Optional[str] = None,
+) -> Dict[str, Any]:
+    rng = random.Random(seed)
+    difficulty_tier = _normalize_difficulty_tier(difficulty_tier, default=DIFFICULTY_TIER_MEDIUM)
+
+    base_name = rng.choice(REQUESTER_NAMES)
+    city, postcode, street = rng.choice(CITIES_WITH_POSTCODES)
+    identity = _build_identity_scenario(base_name, city, street, postcode, rng)
+    is_adversarial = rng.random() < 0.50
+    spoofing_pattern = rng.choice(CASE4_SPOOFING_PATTERNS) if is_adversarial else "genuine_request"
+
+    spoofed_supported_methods: set[str] = set()
+    dsar_suffix = (
+        "\n\nI no longer have access to the original work email associated with the account, so I am contacting you from a personal address."
+    )
+    if is_adversarial:
+        spoofed_supported_methods, extra_suffix = _apply_adversarial_identity_pattern(
+            identity,
+            spoofing_pattern,
+            difficulty_tier,
+            rng,
+        )
+        dsar_suffix += extra_suffix
+        identity["starting_identity_confidence"] = round(
+            max(0.35, min(0.55, identity["starting_identity_confidence"] - 0.03)),
+            2,
+        )
+    else:
+        masked_billing = identity["internal_identity_masked"]["billing"]
+        masked_crm = identity["internal_identity_masked"]["crm"]
+        if difficulty_tier == DIFFICULTY_TIER_LOW:
+            masked_billing["security_review_note"] = "The submitted identity aligns with historical billing evidence."
+            masked_crm["security_review_note"] = "The workspace and contact trail align with the account record."
+        elif difficulty_tier == DIFFICULTY_TIER_HIGH:
+            masked_billing["security_review_note"] = "The identity trail appears generally consistent, though some formatting differs from older records."
+            masked_crm["security_review_note"] = "The contact and workspace history remain broadly consistent with the account."
+
+    request_date = _make_request_date(rng)
+    dsar_text = CASE2_DSAR_TEMPLATE.format(
+        submitted_name=identity["submitted_identity"]["full_name"],
+        submitted_email=identity["submitted_identity"]["email"],
+        submitted_address=identity["submitted_identity"]["billing_address"],
+        request_date=request_date,
+    )
+    dsar_text = f"{dsar_text}{dsar_suffix}"
+
+    difficulty_profile = {
+        "spoof_ambiguity": difficulty_tier,
+        "pattern_complexity": "single" if difficulty_tier == DIFFICULTY_TIER_LOW else ("mixed" if difficulty_tier == DIFFICULTY_TIER_MEDIUM else "combined"),
+    }
+
+    return {
+        "dsar_text": dsar_text,
+        "submitted_identity": identity["submitted_identity"],
+        "internal_identity_full": identity["internal_identity_full"],
+        "internal_identity_masked": identity["internal_identity_masked"],
+        "starting_identity_confidence": identity["starting_identity_confidence"],
+        "verification_threshold": CASE2_VERIFICATION_THRESHOLD,
+        "correct_verification_method": identity["correct_verification_method"],
+        "is_adversarial": is_adversarial,
+        "spoofing_pattern": spoofing_pattern,
+        "spoofed_supported_methods": sorted(spoofed_supported_methods),
+        "scenario_variant": "adversarial_identity",
+        "difficulty_tier": difficulty_tier,
+        "difficulty_profile": difficulty_profile,
+    }
+
+
+def _case5_signal_text(signal_variant: str, full_name: str, rng: random.Random) -> str:
+    if signal_variant == CASE5_SIGNAL_PHISHING_EMAIL:
+        return (
+            f"I received a phishing email that included my name and recent payment details. "
+            f"I do not understand how anyone outside your systems would know that."
+        )
+    if signal_variant == CASE5_SIGNAL_FORUM_EXPOSURE:
+        return (
+            f"I saw what appeared to be my personal information being discussed on a public breach forum."
+        )
+    if signal_variant == CASE5_SIGNAL_ACCOUNT_REFERENCE:
+        return (
+            f"Someone contacted me using my account reference and support history, which I have not shared externally."
+        )
+    return (
+        f"I received messages targeting my registered address and billing details in a way that suggests my account data may have been exposed."
+    )
+
+
+def _apply_case5_breach_difficulty(
+    difficulty_tier: str,
+    signal_variant: str,
+    signal_text: str,
+    breached_fields: List[str],
+) -> tuple[str, Dict[str, Any]]:
+    if difficulty_tier == DIFFICULTY_TIER_LOW:
+        return (
+            signal_text + " I believe this may indicate a personal data breach.",
+            {
+                "signal_explicitness": "high",
+                "breached_field_count": len(breached_fields),
+            },
+        )
+    if difficulty_tier == DIFFICULTY_TIER_MEDIUM:
+        return (
+            signal_text,
+            {
+                "signal_explicitness": "medium",
+                "breached_field_count": len(breached_fields),
+            },
+        )
+    softened = (
+        signal_text
+        .replace("breach", "incident")
+        .replace("exposed", "seen by others")
+        .replace("phishing email", "unexpected message")
+        .replace("public breach forum", "public discussion board")
+        .replace("account reference and support history", "details that resembled my account history")
+        .replace("registered address and billing details", "details that matched my account")
+    )
+    return (
+        softened + " I am not sure whether this is routine spam or something more specific, but it felt unusual.",
+        {
+            "signal_explicitness": "low",
+            "breached_field_count": len(breached_fields),
+        },
+    )
+
+
+def generate_case5_breach_embedded_episode(
+    seed: Optional[int] = None,
+    difficulty_tier: Optional[str] = None,
+) -> Dict[str, Any]:
+    rng = random.Random(seed)
+    difficulty_tier = _normalize_difficulty_tier(difficulty_tier, default=DIFFICULTY_TIER_HIGH)
+
+    full_name = rng.choice(REQUESTER_NAMES)
+    email = _make_email(full_name, rng)
+    city, postcode, street = rng.choice(CITIES_WITH_POSTCODES)
+    billing_address = f"{street}, {city}, {postcode}"
+    support_ticket_ids = [f"TKT-{rng.randint(1000, 9999)}" for _ in range(2)]
+
+    values_lookup = _build_case5_structured_values(
+        full_name=full_name,
+        email=email,
+        billing_address=billing_address,
+        support_ticket_ids=support_ticket_ids,
+        rng=rng,
+    )
+    customer_record = _build_customer_record(values_lookup, rng)
+    ground_truth = {field_id: "REQUESTER_DATA" for field_id in CASE5_COMPACT_REQUESTER_FIELDS}
+    for field_id in CASE5_COMPACT_INTERNAL_FIELDS:
+        ground_truth[field_id] = "INTERNAL_ONLY"
+
+    has_breach = rng.random() < 0.60
+    breach_signal = None
+    breached_fields: List[str] = []
+    difficulty_profile: Dict[str, Any] = {"signal_explicitness": "none", "breached_field_count": 0}
+    scenario_variant = "clean_dsar"
+    if has_breach:
+        scenario_variant = rng.choice(CASE5_SIGNAL_VARIANTS)
+        breach_signal = _case5_signal_text(scenario_variant, full_name, rng)
+        breached_fields = rng.sample(CASE5_COMPACT_REQUESTER_FIELDS, rng.randint(1, min(3, len(CASE5_COMPACT_REQUESTER_FIELDS))))
+        breach_signal, difficulty_profile = _apply_case5_breach_difficulty(
+            difficulty_tier,
+            scenario_variant,
+            breach_signal,
+            breached_fields,
+        )
+
+    request_date = _make_request_date(rng)
+    dsar_text = CASE1_DSAR_TEMPLATE.format(
+        email=email,
+        full_name=full_name,
+        request_date=request_date,
+    )
+    if breach_signal:
+        dsar_text = f"{dsar_text}\n\nAdditional concern: {breach_signal}"
+
+    return {
+        "customer_record": customer_record,
+        "values_lookup": values_lookup,
+        "ground_truth": ground_truth,
+        "dsar_text": dsar_text,
+        "has_breach": has_breach,
+        "breach_signal": breach_signal,
+        "breached_fields": breached_fields,
+        "scenario_variant": scenario_variant,
+        "difficulty_tier": difficulty_tier,
+        "difficulty_profile": difficulty_profile,
     }
 
 
@@ -1177,8 +1738,11 @@ def _generate_cancellation_ticket(
 
 def generate_case1_episode(
     seed: Optional[int] = None,
+    difficulty_tier: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Dict[str, str], str]:
     rng = random.Random(seed)
+    difficulty_tier = _normalize_difficulty_tier(difficulty_tier, default=DIFFICULTY_TIER_LOW)
+    variant = case1_variant_for_seed(seed, difficulty_tier)
 
     full_name = rng.choice(REQUESTER_NAMES)
     email = _make_email(full_name, rng)
@@ -1193,7 +1757,10 @@ def generate_case1_episode(
         support_ticket_ids=support_ticket_ids,
         rng=rng,
     )
+    description_overrides, dsar_suffix = _apply_case1_variant(variant, raw_values, full_name, rng)
     customer_record = _build_customer_record(raw_values, rng)
+    _apply_case1_description_overrides(customer_record, description_overrides)
+    difficulty_profile = _apply_case1_difficulty(difficulty_tier, customer_record, raw_values, rng)
     ground_truth = dict(FIELD_GROUND_TRUTH)
     request_date = _make_request_date(rng)
     dsar_text = CASE1_DSAR_TEMPLATE.format(
@@ -1201,11 +1768,21 @@ def generate_case1_episode(
         full_name=full_name,
         request_date=request_date,
     )
+    dsar_text = f"{dsar_text}{dsar_suffix}"
     return customer_record, raw_values, ground_truth, dsar_text
 
 
-def generate_case2_episode(seed: Optional[int] = None) -> Dict[str, Any]:
+def generate_case2_episode(seed: Optional[int] = None, difficulty_tier: Optional[str] = None) -> Dict[str, Any]:
     rng = random.Random(seed)
+    difficulty_tier = _normalize_difficulty_tier(difficulty_tier, default=DIFFICULTY_TIER_MEDIUM)
+    variant = _choose_variant(
+        rng,
+        (
+            "email_mismatch_support_tickets",
+            "corporate_to_personal_email_loss",
+            "near_match_identity_support_case",
+        ),
+    )
 
     base_name = rng.choice(REQUESTER_NAMES)
     city, postcode, street = rng.choice(CITIES_WITH_POSTCODES)
@@ -1230,6 +1807,8 @@ def generate_case2_episode(seed: Optional[int] = None) -> Dict[str, Any]:
         support_ticket_ids.append(ticket_id)
 
     rng.shuffle(tickets)
+    dsar_suffix = _apply_case2_variant(variant, identity, tickets, rng)
+    difficulty_profile = _apply_case2_difficulty(difficulty_tier, identity, tickets, rng)
 
     raw_values = _build_structured_case_values(
         full_name=identity["internal_identity_full"]["full_name"],
@@ -1247,6 +1826,8 @@ def generate_case2_episode(seed: Optional[int] = None) -> Dict[str, Any]:
         submitted_address=identity["submitted_identity"]["billing_address"],
         request_date=request_date,
     )
+    dsar_text = f"{dsar_text}{dsar_suffix}"
+    raw_values["scenario_variant"] = variant
 
     return {
         "customer_record": customer_record,
@@ -1263,6 +1844,9 @@ def generate_case2_episode(seed: Optional[int] = None) -> Dict[str, Any]:
         "identity_ambiguity": identity["identity_ambiguity"],
         "tickets": tickets,
         "ticket_ground_truth": ticket_ground_truth,
+        "scenario_variant": variant,
+        "difficulty_tier": difficulty_tier,
+        "difficulty_profile": difficulty_profile,
     }
 
 
@@ -1372,8 +1956,127 @@ def _case3_distractor_count() -> int:
         return 0
 
 
-def generate_case3_episode(seed: Optional[int] = None) -> Dict[str, Any]:
+def _case3_variant_payload(
+    variant: str,
+    requester_first: str,
+    project: str,
+    project_lower: str,
+    health_condition: str,
+    build_num: int,
+    env: str,
+    timestamps: Dict[str, str],
+    rng: random.Random,
+) -> Dict[str, str]:
+    if variant == "hr_dispute_channel":
+        return {
+            "team_channel": "people-ops-review",
+            "health_text": (
+                f"{requester_first}'s return-to-work planning references {health_condition} treatment details that need HR review."
+            ),
+            "clean_text": (
+                f"I uploaded the revised people-ops timeline for {project} and updated the response tracker for the current case."
+            ),
+            "mixed_text": (
+                f"Hey {requester_first}, can you sanity-check the case response draft? "
+                "Also, my pay review is making me anxious and I do not want that circulating."
+            ),
+            "thread_text": "Good to go from my side.",
+            "bot_text": f"HR sync #{build_num} completed. {project} records mirrored to {env}.",
+            "perf_text": (
+                f"{requester_first}'s delivery on {project} is below expectations for this review cycle. "
+                f"Ref {rng.choice(CASE3_INTERNAL_HR_CODES)}."
+            ),
+        }
+    if variant == "customer_success_vendor_channel":
+        return {
+            "team_channel": "vendor-escalations",
+            "health_text": (
+                f"I need to note that I'm managing {health_condition}, which is affecting how quickly I can handle the {project} vendor escalation."
+            ),
+            "clean_text": (
+                f"I pushed the latest customer-success notes for {project} and updated the vendor rollout tracker."
+            ),
+            "mixed_text": (
+                f"Hey {requester_first}, can you look over the partner escalation draft for {project}? "
+                "Also, my compensation review is stressing me out and I would rather keep that private."
+            ),
+            "thread_text": "Good to go from my side.",
+            "bot_text": f"Vendor sync #{build_num} completed. {project} account data refreshed in {env}.",
+            "perf_text": (
+                f"{requester_first}'s handling of the {project} account is below what we expected this quarter. "
+                f"Ref {rng.choice(CASE3_INTERNAL_HR_CODES)}."
+            ),
+        }
+    return {
+        "team_channel": f"{project_lower}-team",
+        "health_text": rng.choice(HEALTH_TRAP_TEMPLATES).format(
+            requester=requester_first,
+            project=project,
+            health_condition=health_condition,
+        ),
+        "clean_text": rng.choice(REQUESTER_CLEAN_TEMPLATES).format(
+            project=project,
+            project_lower=project_lower,
+        ),
+        "mixed_text": (
+            f"Hey {requester_first}, {rng.choice(PR_PHRASES).format(project=project)}? "
+            f"Also, {rng.choice(SALARY_PHRASES)}."
+        ),
+        "thread_text": rng.choice(THREAD_REPLY_TEMPLATES),
+        "bot_text": rng.choice(BOT_TEMPLATES).format(
+            project=project,
+            build_num=build_num,
+            region=env,
+            env=env,
+            timestamp=timestamps["bot"],
+        ),
+        "perf_text": (
+            rng.choice(MANAGER_PERF_TEMPLATES).format(requester=requester_first)
+            + f" Ref {rng.choice(CASE3_INTERNAL_HR_CODES)}."
+        ),
+    }
+
+
+def _apply_case3_difficulty(
+    difficulty_tier: str,
+    payload: Dict[str, str],
+) -> Dict[str, Any]:
+    profile = {
+        "special_category_subtlety": difficulty_tier,
+        "mixed_message_ambiguity": difficulty_tier,
+    }
+
+    if difficulty_tier == DIFFICULTY_TIER_LOW:
+        payload["health_text"] = payload["health_text"].replace("need", "need because this is health-related and sensitive")
+        payload["mixed_text"] = payload["mixed_text"].replace("Also,", "Also, this is private compensation information and")
+        payload["bot_text"] = "Automated bot update: " + payload["bot_text"]
+    elif difficulty_tier == DIFFICULTY_TIER_MEDIUM:
+        lowered = payload["health_text"].lower()
+        if "health" not in lowered and "medical" not in lowered and "illness" not in lowered:
+            payload["health_text"] = payload["health_text"] + " This is health-related and sensitive."
+        payload["health_text"] = payload["health_text"].replace("capacity", "health-related capacity")
+        payload["mixed_text"] = payload["mixed_text"].replace("my review", "my pay review")
+        if "private compensation information" not in payload["mixed_text"]:
+            payload["mixed_text"] = payload["mixed_text"].replace("Also,", "Also, this is private compensation information and")
+    elif difficulty_tier == DIFFICULTY_TIER_HIGH:
+        payload["health_text"] = payload["health_text"].replace("health", "health-related capacity").replace("medical", "health-related capacity")
+        payload["mixed_text"] = payload["mixed_text"].replace("pay review", "review")
+        payload["perf_text"] = payload["perf_text"].replace("performance review", "review cycle")
+
+    return profile
+
+
+def generate_case3_episode(seed: Optional[int] = None, difficulty_tier: Optional[str] = None) -> Dict[str, Any]:
     rng = random.Random(seed)
+    difficulty_tier = _normalize_difficulty_tier(difficulty_tier, default=DIFFICULTY_TIER_HIGH)
+    variant = _choose_variant(
+        rng,
+        (
+            "engineering_channel",
+            "hr_dispute_channel",
+            "customer_success_vendor_channel",
+        ),
+    )
 
     requester_name = rng.choice(EMPLOYEE_NAMES)
     manager_name = rng.choice(MANAGER_NAMES)
@@ -1386,7 +2089,6 @@ def generate_case3_episode(seed: Optional[int] = None) -> Dict[str, Any]:
     requester_first = requester_name.split()[0]
     request_date = _make_request_date(rng)
     employee_id = f"EMP-{rng.randint(1000, 9999)}"
-    team_channel = f"{project_lower}-team"
     other_project = rng.choice([candidate for candidate in PROJECT_NAMES if candidate != project])
     users_json, role_to_user_id = _generate_case3_users_json(
         requester_name=requester_name,
@@ -1395,31 +2097,25 @@ def generate_case3_episode(seed: Optional[int] = None) -> Dict[str, Any]:
         rng=rng,
     )
     timestamps = _generate_case3_timestamps(rng)
-
-    health_text = rng.choice(HEALTH_TRAP_TEMPLATES).format(
-        requester=requester_first,
-        project=project,
-        health_condition=health_condition,
+    variant_payload = _case3_variant_payload(
+        variant,
+        requester_first,
+        project,
+        project_lower,
+        health_condition,
+        build_num,
+        env,
+        timestamps,
+        rng,
     )
-    clean_text = rng.choice(REQUESTER_CLEAN_TEMPLATES).format(
-        project=project,
-        project_lower=project_lower,
-    )
-    pr_phrase = rng.choice(PR_PHRASES).format(project=project)
-    salary_phrase = rng.choice(SALARY_PHRASES)
-    mixed_text = f"Hey {requester_first}, {pr_phrase}? Also, {salary_phrase}."
-    thread_text = rng.choice(THREAD_REPLY_TEMPLATES)
-    bot_text = rng.choice(BOT_TEMPLATES).format(
-        project=project,
-        build_num=build_num,
-        region=env,
-        env=env,
-        timestamp=timestamps["bot"],
-    )
-    perf_text = (
-        rng.choice(MANAGER_PERF_TEMPLATES).format(requester=requester_first)
-        + f" Ref {rng.choice(CASE3_INTERNAL_HR_CODES)}."
-    )
+    difficulty_profile = _apply_case3_difficulty(difficulty_tier, variant_payload)
+    team_channel = variant_payload["team_channel"]
+    health_text = variant_payload["health_text"]
+    clean_text = variant_payload["clean_text"]
+    mixed_text = variant_payload["mixed_text"]
+    thread_text = variant_payload["thread_text"]
+    bot_text = variant_payload["bot_text"]
+    perf_text = variant_payload["perf_text"]
 
     msg_ids = {
         "health": _random_case3_message_id(rng),
@@ -1566,4 +2262,7 @@ def generate_case3_episode(seed: Optional[int] = None) -> Dict[str, Any]:
         "mixed_sentence_message_id": msg_ids["mixed"],
         "employee_id": employee_id,
         "team_channel": team_channel,
+        "scenario_variant": variant,
+        "difficulty_tier": difficulty_tier,
+        "difficulty_profile": difficulty_profile,
     }
