@@ -17,9 +17,15 @@ tags:
 
 # AutoDSAR
 
+**AutoDSAR — GDPR Compliance Reasoning RL Environment**  
+OpenEnv · Meta × HuggingFace × PyTorch Hackathon  
+Live endpoint: https://snaha1911-dsar-env.hf.space
+
 AutoDSAR is a deterministic OpenEnv benchmark for training agents on Data Subject Access Request (DSAR) work: identity review, evidence gathering, disclosure decisions, redaction, escalation, breach detection, and recovery after unsafe actions.
 
 It is built for the part of privacy operations that is easy to describe and hard to automate: an agent cannot simply classify one document and stop. It has to gather evidence, decide whether the requester is entitled to the data, avoid leaking third-party or internal-only information, detect when the workflow has turned into a breach response, and only compile the final response once the required process is complete.
+
+The agent does not fill a checklist. It navigates a compliance maze: trap actions worsen world state, new mandatory recovery actions appear dynamically, and wrong early decisions constrain all subsequent choices.
 
 Hugging Face Space: https://huggingface.co/spaces/snaha1911/dsar-env  
 Runtime API: https://snaha1911-dsar-env.hf.space
@@ -37,6 +43,27 @@ Runtime API: https://snaha1911-dsar-env.hf.space
 | Core challenge | Finish the workflow while minimizing compliance harm |
 | Main signals | `reward`, `workflow_state`, `step_safety_cost`, `episode_safety_cost`, `constraint_events` |
 | Space UI | Home page, benchmark guide, and live training workbench |
+
+## State Graph Core
+
+Every episode maintains a reactive compliance risk state:
+
+```text
+clean
+  |-- internal field leaked -> risk_elevated
+  |-- serious field leaked -> risk_elevated + required followup
+  `-- Article 9 disclosure -> episode terminated with floor score
+
+risk_elevated
+  |-- second violation or gated compile -> regulatory_alert
+  `-- file_remediation_note -> clean
+
+regulatory_alert
+  |-- further violation -> enforcement
+  `-- file_remediation_note -> risk_elevated
+```
+
+This is the key difference between AutoDSAR and a static compliance classifier: unsafe actions change the environment, not just the reward.
 
 ## What Is A DSAR?
 
@@ -92,6 +119,29 @@ This is a benchmark structure, not a model leaderboard. The charts in this READM
 | Redaction quality | Did it preserve requester-owned data while removing third-party/internal content? |
 | Breach handling | Did it detect the breach and notify in the required order? |
 | Safety cost | Did it avoid privacy harm, unsafe compile attempts, and compliance-state regressions? |
+
+## Baseline Score Snapshot
+
+Project-note baseline across fixed task seeds. Scores are benchmark context, not a final leaderboard.
+
+| Task | Qwen 2.5-72B | GPT-4o-mini | GPT-4.1-mini | GPT-5.1-mini | Gemini 2.5 Pro |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `task_easy` | 0.95 | 0.88 | 0.91 | 0.95 | 0.93 |
+| `task_medium` | 0.49 | 0.42 | 0.55 | 0.61 | 0.60 |
+| `task_adversarial_identity` | 0.38 | 0.35 | 0.47 | 0.55 | 0.58 |
+| `task_hard` | 0.15 | 0.12 | 0.28 | 0.40 | 0.44 |
+| `task_breach_embedded` | 0.22 | 0.18 | 0.34 | 0.44 | 0.46 |
+| Average | 0.44 | 0.39 | 0.51 | 0.59 | 0.60 |
+
+The easy task acts as a curriculum foundation. The hard and breach tasks expose the main RL gap: catastrophic Article 9 avoidance and ordered breach-notification discipline.
+
+## Why This Genuinely Requires RL
+
+- Partial observability: field sensitivity labels, adversarial identity state, and breach hidden state are inferred from visible evidence rather than exposed directly.
+- Sequential consequence: a wrong early disclosure can elevate compliance state, block compile later, and force a recovery detour.
+- Calibrated thresholds: the adversarial task requires learning when to suspect spoofing without over-rejecting genuine requesters.
+- Catastrophic avoidance: Article 9 health disclosure and breach notification ordering create asymmetric failure modes.
+- Hierarchical workflow: the policy must learn both the workflow phase strategy and the local action within that phase.
 
 ## Core Environment Upgrades
 
