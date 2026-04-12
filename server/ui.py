@@ -111,6 +111,7 @@ CSS = """
 }
 .autodsar-brand {
   font-weight: 900;
+  font-size: 30px;
   color: #f8fafc;
 }
 .autodsar-badge {
@@ -147,12 +148,12 @@ CSS = """
 .autodsar-copy h1 {
   margin: 10px 0 12px;
   color: #f8fafc;
-  font-size: 54px;
+  font-size: 68px;
   line-height: 1.02;
 }
 .autodsar-copy p, .autodsar-copy li {
   color: #cbd5e1;
-  font-size: 17px;
+  font-size: 20px;
 }
 .autodsar-board {
   background: rgba(2,6,23,.88);
@@ -281,7 +282,7 @@ textarea, input, select {
     grid-template-columns: 1fr;
   }
   .autodsar-copy h1 {
-    font-size: 40px;
+    font-size: 44px;
   }
   .autodsar-step, .autodsar-bar {
     grid-template-columns: 1fr;
@@ -488,84 +489,66 @@ def build_autodsar_ui(web_manager, action_fields, metadata, is_chat_env, title, 
         obs = result.get("observation", {})
         return _summary(obs), _visible_payload(obs), _audit(obs)
 
-    def show_home():
-        return gr.update(visible=True), gr.update(visible=False), gr.update(visible=False)
-
-    def show_train():
-        return gr.update(visible=False), gr.update(visible=True), gr.update(visible=False)
-
-    def show_guide():
-        return gr.update(visible=False), gr.update(visible=False), gr.update(visible=True)
-
     with gr.Blocks(title="AutoDSAR") as demo:
-        with gr.Column(visible=True) as home_page:
-            gr.HTML(_home_html())
-            with gr.Row():
-                launch = gr.Button("Open training workbench", variant="primary")
-                guide_from_home = gr.Button("Read benchmark guide", variant="secondary")
+        with gr.Tabs(selected="home"):
+            with gr.Tab("Home", id="home"):
+                gr.HTML(_home_html())
+                gr.Markdown(
+                    """
+Use the tabs above to open the live training workbench or the benchmark guide. The workbench is connected to the same OpenEnv reset and step endpoints used by the API.
+                    """,
+                    elem_classes=["autodsar-alert"],
+                )
 
-        with gr.Column(visible=False) as train_page:
-            gr.HTML(
-                f"""
-                <style>{CSS}</style>
-                <div class="autodsar-shell">
-                  <div class="autodsar-nav">
-                    <div class="autodsar-brand">Training Workbench</div>
-                    <div class="autodsar-badge">Live OpenEnv episode</div>
-                  </div>
-                </div>
-                """
-            )
-            with gr.Row():
-                back_home = gr.Button("Home", variant="secondary")
-                guide_from_train = gr.Button("Benchmark guide", variant="secondary")
-            with gr.Row():
-                with gr.Column(scale=1):
-                    gr.Markdown("### Configure episode")
-                    task = gr.Dropdown(task_labels, value=task_labels[0], label="Task")
-                    difficulty = gr.Dropdown(DIFFICULTIES, value="medium", label="Difficulty tier")
-                    seed = gr.Number(value=42, precision=0, label="Seed")
-                    reset_button = gr.Button("Start episode", variant="primary")
-                    mission = gr.Markdown(_task_markdown(task_labels[0]), elem_classes=["autodsar-note"])
-                    template_kind = gr.Radio(
-                        ["Starter action", "Next useful action"],
-                        value="Starter action",
-                        label="Action template",
-                    )
-                    action_json = gr.Code(
-                        value=TASKS["task_easy"]["starter"],
-                        language="json",
-                        label="Action JSON",
-                        lines=9,
-                    )
-                    step_button = gr.Button("Run action", variant="primary")
+            with gr.Tab("Training Workbench", id="training"):
+                gr.HTML(
+                    f"""
+                    <style>{CSS}</style>
+                    <div class="autodsar-shell">
+                      <div class="autodsar-nav">
+                        <div class="autodsar-brand">Training Workbench</div>
+                        <div class="autodsar-badge">Live OpenEnv episode</div>
+                      </div>
+                    </div>
+                    """
+                )
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        gr.Markdown("### Configure episode")
+                        task = gr.Dropdown(task_labels, value=task_labels[0], label="Task")
+                        difficulty = gr.Dropdown(DIFFICULTIES, value="medium", label="Difficulty tier")
+                        seed = gr.Number(value=42, precision=0, label="Seed")
+                        reset_button = gr.Button("Start episode", variant="primary")
+                        mission = gr.Markdown(_task_markdown(task_labels[0]), elem_classes=["autodsar-note"])
+                        template_kind = gr.Radio(
+                            ["Starter action", "Next useful action"],
+                            value="Starter action",
+                            label="Action template",
+                        )
+                        action_json = gr.Code(
+                            value=TASKS["task_easy"]["starter"],
+                            language="json",
+                            label="Action JSON",
+                            lines=9,
+                        )
+                        step_button = gr.Button("Run action", variant="primary")
 
-                with gr.Column(scale=2):
-                    gr.Markdown("### Live state")
-                    summary = gr.Code(label="Workflow and safety state", language="json", lines=14)
-                    payload = gr.Code(label="Visible observation payload", language="json", lines=20)
-                    audit = gr.Code(label="Audit trail and constraint events", language="json", lines=12)
+                    with gr.Column(scale=2):
+                        gr.Markdown("### Live state")
+                        summary = gr.Code(label="Workflow and safety state", language="json", lines=14)
+                        payload = gr.Code(label="Visible observation payload", language="json", lines=20)
+                        audit = gr.Code(label="Audit trail and constraint events", language="json", lines=12)
 
-            gr.Markdown(
-                """
+                gr.Markdown(
+                    """
 ### Training loop
 Start an episode, run one action at a time, and watch the safety fields. A good policy should improve task progress without pushing `current_compliance_state` into elevated risk or accumulating avoidable `episode_safety_cost`.
-                """,
-                elem_classes=["autodsar-alert"],
-            )
+                    """,
+                    elem_classes=["autodsar-alert"],
+                )
 
-        with gr.Column(visible=False) as guide_page:
-            gr.HTML(_guide_html())
-            with gr.Row():
-                guide_home = gr.Button("Home", variant="secondary")
-                guide_train = gr.Button("Open training workbench", variant="primary")
-
-        launch.click(show_train, outputs=[home_page, train_page, guide_page])
-        guide_from_home.click(show_guide, outputs=[home_page, train_page, guide_page])
-        back_home.click(show_home, outputs=[home_page, train_page, guide_page])
-        guide_from_train.click(show_guide, outputs=[home_page, train_page, guide_page])
-        guide_home.click(show_home, outputs=[home_page, train_page, guide_page])
-        guide_train.click(show_train, outputs=[home_page, train_page, guide_page])
+            with gr.Tab("Benchmark Guide", id="guide"):
+                gr.HTML(_guide_html())
 
         task.change(_task_markdown, inputs=task, outputs=mission)
         template_kind.change(_task_template, inputs=[task, template_kind], outputs=action_json)
