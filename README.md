@@ -18,7 +18,6 @@ tags:
 # AutoDSAR
 
 **AutoDSAR — GDPR Compliance Reasoning RL Environment**  
-OpenEnv · Meta × HuggingFace × PyTorch Hackathon  
 Live endpoint: https://snaha1911-dsar-env.hf.space
 
 AutoDSAR is a deterministic OpenEnv benchmark for training agents on Data Subject Access Request (DSAR) work: identity review, evidence gathering, disclosure decisions, redaction, escalation, breach detection, and recovery after unsafe actions.

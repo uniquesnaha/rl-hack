@@ -443,7 +443,7 @@ def _home_html() -> str:
     <div class="autodsar-shell">
       <div class="autodsar-nav">
         <div class="autodsar-brand">AutoDSAR</div>
-        <div class="autodsar-badge">OpenEnv · Meta × HuggingFace × PyTorch Hackathon</div>
+        <div class="autodsar-badge">OpenEnv privacy RL</div>
       </div>
       <section class="autodsar-hero">
         <div class="autodsar-copy">
@@ -677,10 +677,10 @@ def build_autodsar_ui(web_manager, action_fields, metadata, is_chat_env, title, 
     with gr.Blocks(title="AutoDSAR") as demo:
         with gr.Tabs(selected="home"):
             with gr.Tab("Home", id="home"):
-                gr.HTML(_home_html())
+                gr.HTML(_home_html() + _guide_html())
                 gr.Markdown(
                     """
-Use the tabs above to open the live training workbench or the benchmark guide. The workbench is connected to the same OpenEnv reset and step endpoints used by the API.
+Use the Training Workbench tab to run live OpenEnv episodes against the same reset and step endpoints used by the API.
                     """,
                     elem_classes=["autodsar-alert"],
                 )
@@ -731,9 +731,6 @@ Start an episode, run one action at a time, and watch the safety fields. A good 
                     """,
                     elem_classes=["autodsar-alert"],
                 )
-
-            with gr.Tab("Benchmark Guide", id="guide"):
-                gr.HTML(_guide_html())
 
         task.change(_task_markdown, inputs=task, outputs=mission)
         template_kind.change(_task_template, inputs=[task, template_kind], outputs=action_json)
