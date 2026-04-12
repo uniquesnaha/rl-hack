@@ -15,11 +15,16 @@ except ImportError:
 
 from models import DSARAction, DSARObservation
 from .dsar_environment import DSAREnvironment
+from .ui import build_autodsar_ui
 
 # Create the app using OpenEnv's factory helper.
 # Pass the CLASS (not instance) — the framework creates instances per session.
 app = create_app(
-    DSAREnvironment, DSARAction, DSARObservation, env_name="dsar_env"
+    DSAREnvironment,
+    DSARAction,
+    DSARObservation,
+    env_name="dsar_env",
+    gradio_builder=build_autodsar_ui,
 )
 
 

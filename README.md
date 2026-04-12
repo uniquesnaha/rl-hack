@@ -1,6 +1,6 @@
 ---
-title: Dsar Env Environment Server
-emoji: 🔊
+title: AutoDSAR
+emoji: 🔐
 colorFrom: blue
 colorTo: green
 sdk: docker
@@ -9,140 +9,183 @@ app_port: 8000
 base_path: /web
 tags:
   - openenv
+  - reinforcement-learning
+  - privacy
+  - compliance
+  - gdpr
 ---
 
 # AutoDSAR
 
-AutoDSAR is a deterministic OpenEnv environment for training agents on safety-critical privacy operations around Data Subject Access Requests (DSARs).
+AutoDSAR is a deterministic OpenEnv benchmark for training agents on Data Subject Access Request (DSAR) work: identity review, evidence gathering, disclosure decisions, redaction, escalation, breach detection, and recovery after unsafe actions.
 
-The current environment includes five tasks:
-- `task_easy`: structured customer-record disclosure classification
-- `task_medium`: identity verification plus sentence-level support-ticket redaction
-- `task_adversarial_identity`: adversarial identity review with spoof detection
-- `task_hard`: Slack compliance triage with special-category escalation
-- `task_breach_embedded`: compact DSAR review with embedded breach detection and ordered notification workflow
+It is built for the part of privacy operations that is easy to describe and hard to automate: an agent cannot simply classify one document and stop. It has to gather evidence, decide whether the requester is entitled to the data, avoid leaking third-party or internal-only information, detect when the workflow has turned into a breach response, and only compile the final response once the required process is complete.
 
-## Why this is an RL environment
+Hugging Face Space: https://huggingface.co/spaces/snaha1911/dsar-env  
+Runtime API: https://snaha1911-dsar-env.hf.space
 
-AutoDSAR is sequential, partially observable, and safety-critical:
-- the agent must gather evidence before acting
-- the correct next action depends on hidden episode state
-- wrong actions can worsen compliance state and trigger recovery work
-- reward and safety cost are tracked separately
-- workflow state is exposed explicitly for training and debugging
+## What Is A DSAR?
 
-## Tasks
+A DSAR is a request from a person asking an organization for access to personal data held about them. Under GDPR-style privacy regimes, the organization must identify the requester, find the relevant records, disclose requester-owned personal data, withhold or redact data that should not be shared, and respond within a deadline.
 
-### `task_easy`
-Query `billing` and `crm`, reveal the structured customer record, then classify each field as `disclose` or `withhold`.
+That sounds like a document task, but real DSAR work is a sequential operational workflow:
 
-### `task_medium`
-Perform proportionate identity verification first, then redact support-ticket sentences one by one while preserving requester-owned content and removing third-party/internal content.
+- A requester may be genuine, ambiguous, or adversarial.
+- Evidence may live across billing systems, CRM records, support tickets, and chat exports.
+- Some data belongs to the requester; some belongs to third parties; some is internal-only.
+- Special-category data, such as health information, needs stronger handling.
+- A DSAR can surface a separate breach signal that requires regulator and requester notification.
+- Unsafe actions should have consequences and remediation paths, not just a lower score.
 
-### `task_adversarial_identity`
-Review a suspicious identity request, query both silos, then either verify a genuine requester proportionately or flag a spoofed requester with a concrete reason.
+AutoDSAR turns those constraints into an RL environment with deterministic graders, workflow states, safety costs, and reproducible procedural scenarios.
 
-### `task_hard`
-Triage a candidate Slack export using `disclose`, `partial_redact`, `exclude`, or `escalate`, with special-category health data acting as the main legal trap.
+## Why This Helps
 
-### `task_breach_embedded`
-Handle a compact DSAR record while detecting whether the request also contains a breach signal. If a breach is present, the agent must flag it and notify regulator then requester before compile.
+Most agent benchmarks reward final answers. Privacy operations need process discipline. AutoDSAR is designed to test whether an agent can follow the right procedure while under ambiguity.
 
-## Action space
+It helps with:
 
-- `query_silo`
-- `classify_field`
-- `verify_identity`
-- `flag_adversarial`
-- `flag_breach_signal`
-- `notify_regulator`
-- `notify_requester`
-- `redact_span`
-- `process_message`
-- `redact_sentence`
-- `escalate_with_reason`
-- `file_remediation_note`
-- `justify_verification_method`
-- `file_redaction_remediation`
-- `compile_response`
+- Training agents to gather evidence before acting.
+- Measuring safety separately from task reward.
+- Evaluating redaction and disclosure decisions with deterministic ground truth.
+- Testing adversarial identity behavior, not only benign requests.
+- Practicing breach-response ordering: detect, notify regulator, notify requester, then compile.
+- Producing reproducible trajectories for imitation learning, offline RL, and error analysis.
 
-## Observation highlights
+## Benchmark Ladder
 
-All tasks expose:
-- `episode_id`
-- `task_id`
-- `available_actions`
-- `audit_trail`
-- `steps_remaining`
-- `compile_ready`
-- `current_compliance_state`
-- `workflow_state`
+AutoDSAR now contains a five-task benchmark ladder:
+
+| Task | Focus | What The Agent Must Learn |
+| --- | --- | --- |
+| `task_easy` | Structured disclosure | Query billing and CRM, then classify fields as `disclose` or `withhold`. |
+| `task_medium` | Identity plus support-ticket redaction | Verify identity proportionately, then redact sentence-level ticket content. |
+| `task_adversarial_identity` | Spoof-resistant identity review | Gather evidence, verify genuine requesters, or flag adversarial behavior. |
+| `task_hard` | Slack compliance triage | Process Slack messages, partial-redact where needed, and escalate special-category health traps. |
+| `task_breach_embedded` | DSAR plus breach response | Detect hidden breach signals, notify regulator, notify requester, then compile safely. |
+
+The old recipient-balancing task was removed because it was brittle and difficult to calibrate. It was replaced with tasks that have stronger hidden-state structure, clearer graders, and better RL signal.
+
+## Core Environment Upgrades
+
+AutoDSAR models DSAR handling as a reactive workflow rather than a flat classifier.
+
+- Reactive compliance state machine: unsafe actions can move the episode from `clean` into elevated regulatory-risk states.
+- Recovery actions: after an unsafe move, the agent may need remediation before safe completion.
+- Workflow-state tracking: observations expose states such as discovery, identity review, redaction, escalation pending, breach review, and ready-to-compile.
+- Compile gating: `compile_response` is blocked until the required workflow is complete.
+- Deterministic task-specific graders: each task has its own grading logic instead of one generic score.
+- Process reward decomposition: intermediate steps receive meaningful reward signal.
+- Quadratic partial-progress scoring: shallow progress helps, but finishing the workflow matters much more.
+- Milestone rewards: key transitions such as querying both silos, safe identity verification, breach detection, and regulator notification receive bonuses.
+- Diagnosis reward: selected actions receive additional reward for useful justification text.
+- Open-interval score clamping: final scores are kept inside `(0, 1)` to avoid validator boundary issues.
+
+## Safety Modeling
+
+AutoDSAR separates operational reward from compliance harm.
+
+Observations include:
+
 - `step_safety_cost`
 - `episode_safety_cost`
 - `constraint_events`
+- `current_compliance_state`
+- `required_followup_action`
+- `recovery_actions_taken`
+- `workflow_state`
 
-Task-specific fields:
-- easy: `customer_record`, `classified_fields`, `silo_results`
-- medium: `phase`, `identity_confidence`, `tickets`, `processed_sentences`
-- adversarial identity: `submitted_identity`, `internal_identity`, `identity_confidence`
-- hard: `slack_export`, `users_json`, `processed_messages`, `messages_pending`, `sentences_pending`
-- breach embedded: `breach_detected`, `regulator_notified`, `requester_notified`, `breach_scope_fields`, `breach_signal_context`
+Examples of safety events include:
 
-## Reward and safety
+- Internal-only data disclosure.
+- Third-party disclosure.
+- Disproportionate verification.
+- False-positive rejection.
+- Identity spoof accepted.
+- Special-category health data disclosure.
+- False breach report.
+- Missed breach signal.
+- Regulator or requester notification missed.
+- Unsafe compile attempt.
 
-AutoDSAR keeps task reward and safety cost separate:
-- `reward` captures progress and task quality
-- `step_safety_cost` captures immediate privacy/compliance harm
-- `episode_safety_cost` accumulates harm across the episode
+The terminal score blends completion, process quality, safety events, and whether the agent avoided or recovered from dangerous states.
 
-Examples of safety events:
-- internal data leak
-- disproportionate verification
-- false-positive rejection
-- identity spoof accepted
-- false breach report
-- breach signal missed
-- requester notice missed
-- third-party disclosure
-- special-category near miss
-- special-category disclosure
-- unsafe compile
+## Task-Specific Enhancements
 
-## Training-oriented features
+`task_adversarial_identity` introduces hidden-state identity review. The requester may be genuine or spoofed, and spoof patterns include near-miss identity, borrowed details, stale evidence, urgency pressure, and mixed partial matches.
 
-The environment includes:
-- reactive compliance-risk states
-- workflow-state IDs
-- deterministic difficulty tiers
-- procedural scenario variants
-- diagnosis/reasoning reward
-- optional potential-based shaping
-- optional trajectory export for imitation and offline RL
+`task_breach_embedded` turns a DSAR into a possible breach-response workflow. The agent must detect the breach signal early, notify the regulator, notify the requester, and only then compile. Late detection is penalized, and leaking internal-only fields still strongly reduces the terminal score even if the notification workflow is completed.
 
-Trajectory export can be enabled with:
-- `DSAR_EXPORT_TRAJECTORIES=true`
-- `DSAR_TRAJECTORY_EXPORT_PATH=dsar_trajectories.jsonl`
+`task_hard` tests operational redaction and escalation over Slack-like records. Special-category health content acts as the main legal trap.
 
-## Quickstart
+`task_medium` tests proportional identity verification before sentence-level support-ticket redaction.
 
-### Install
+`task_easy` provides the structured entry point for disclosure and withholding behavior.
+
+## Training Features
+
+- Difficulty tiers: `low`, `medium`, and `high`.
+- Scenario variants: multiple realistic archetypes reduce overfitting.
+- Optional potential-based shaping: denser reward without changing the optimal policy.
+- Trajectory export: JSONL traces for imitation learning, offline RL, or IRL-style experiments.
+- Per-task reproducible seeds: rerun benchmark comparisons deterministically.
+- Prompt compaction in inference: long structured values are shortened to reduce token load.
+- Action validation retries: malformed model actions are corrected before the run fails.
+
+Enable trajectory export with:
 
 ```bash
-cd dsar_env
+DSAR_EXPORT_TRAJECTORIES=true
+DSAR_TRAJECTORY_EXPORT_PATH=dsar_trajectories.jsonl
+```
+
+## API Quickstart
+
+Reset an episode:
+
+```bash
+curl -X POST https://snaha1911-dsar-env.hf.space/reset \
+  -H "Content-Type: application/json" \
+  -d '{"task_id":"task_easy","difficulty_tier":"medium","seed":42}'
+```
+
+Take a step:
+
+```bash
+curl -X POST https://snaha1911-dsar-env.hf.space/step \
+  -H "Content-Type: application/json" \
+  -d '{"action":{"action_type":"query_silo","silo_name":"billing"}}'
+```
+
+Useful endpoints:
+
+- `GET /health`
+- `GET /metadata`
+- `GET /schema`
+- `POST /reset`
+- `POST /step`
+- `GET /state`
+- `GET /web/metadata`
+- `POST /web/reset`
+- `POST /web/step`
+
+## Local Quickstart
+
+Install:
+
+```bash
 pip install -e .[dev]
 ```
 
-### Run the environment server
+Run the server:
 
 ```bash
-cd dsar_env
 uvicorn server.app:app --host 127.0.0.1 --port 8010
 ```
 
-### Run the baseline client
+Run the inference harness:
 
 ```bash
-cd dsar_env
 API_BASE_URL=https://router.huggingface.co/v1 \
 MODEL_NAME=Qwen/Qwen2.5-72B-Instruct:fastest \
 HF_TOKEN=your_hf_token \
@@ -151,7 +194,17 @@ DSAR_TASKS=task_easy,task_medium,task_adversarial_identity,task_hard,task_breach
 python inference.py
 ```
 
-## Useful environment variables
+## Inference Contract
+
+The root `inference.py` script is submission-oriented:
+
+- Uses the OpenAI client interface.
+- Logs with the `[START]`, `[STEP]`, and `[END]` contract.
+- Supports fixed task seeds for reproducible evaluation.
+- Retries invalid actions with correction prompts.
+- Compacts large observations before sending them to the model.
+
+Useful environment variables:
 
 - `DSAR_TASKS`
 - `DSAR_TASK_SEEDS`
@@ -160,29 +213,36 @@ python inference.py
 - `DSAR_EXPORT_TRAJECTORIES`
 - `DSAR_TRAJECTORY_EXPORT_PATH`
 
-## Project structure
+## Project Layout
 
 ```text
 rl-hack/
 |-- README.md
-`-- dsar_env/
-    |-- inference.py
-    |-- models.py
-    |-- openenv.yaml
-    |-- server/
-    |   |-- app.py
-    |   |-- constants.py
-    |   |-- dsar_environment.py
-    |   |-- generator.py
-    |   `-- grader.py
-    `-- tests/
-        |-- test_adversarial_identity.py
-        |-- test_breach_embedded.py
-        |-- test_case1.py
-        |-- test_case2.py
-        |-- test_case3.py
-        |-- test_inference_helpers.py
-        |-- test_phase2_enhancements.py
-        |-- test_phase3_training_upgrades.py
-        `-- test_reactive_states.py
+|-- Dockerfile
+|-- openenv.yaml
+|-- pyproject.toml
+|-- inference.py
+|-- client.py
+|-- models.py
+`-- server/
+    |-- app.py
+    |-- ui.py
+    |-- constants.py
+    |-- dsar_environment.py
+    |-- generator.py
+    `-- grader.py
 ```
+
+## What To Watch In An Episode
+
+For a quick smoke test, start `task_easy`, query both silos, then classify every visible field. For the more interesting benchmark behavior, watch these fields change:
+
+- `workflow_state`: where the agent is in the process.
+- `current_compliance_state`: whether the workflow is clean or elevated risk.
+- `required_followup_action`: remediation needed before completion.
+- `step_safety_cost`: immediate compliance harm.
+- `episode_safety_cost`: accumulated harm.
+- `constraint_events`: structured audit of safety failures.
+- `compile_ready`: whether final response compilation is allowed.
+
+The goal is not only to get the answer right. The goal is to get there through the process a real privacy team would trust.
