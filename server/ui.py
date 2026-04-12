@@ -3,9 +3,19 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Optional, Type
 
 import gradio as gr
+from fastapi import Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
+from fastapi.responses import RedirectResponse
+from openenv.core.env_server.gradio_theme import OPENENV_GRADIO_CSS, OPENENV_GRADIO_THEME
+from openenv.core.env_server.http_server import create_fastapi_app
+from openenv.core.env_server.interfaces import Action, Environment, Observation
+from openenv.core.env_server.web_interface import (
+    WebInterfaceManager,
+    get_quick_start_markdown,
+    load_environment_metadata,
+)
 
 
 TASKS: Dict[str, Dict[str, str]] = {
@@ -264,3 +274,88 @@ For the harder tasks, watch `workflow_state`, `current_compliance_state`, `requi
         step_button.click(step, inputs=action_json, outputs=[summary, payload, audit])
 
     return demo
+
+
+def create_autodsar_web_app(
+    env: Callable[[], Environment],
+    action_cls: Type[Action],
+    observation_cls: Type[Observation],
+    env_name: Optional[str] = None,
+    max_concurrent_envs: Optional[int] = None,
+    concurrency_config: Optional[Any] = None,
+) -> FastAPI:
+    """Create the FastAPI app with AutoDSAR as the primary Gradio UI."""
+
+    app = create_fastapi_app(
+        env, action_cls, observation_cls, max_concurrent_envs, concurrency_config
+    )
+    metadata = load_environment_metadata(env, env_name)
+    web_manager = WebInterfaceManager(env, action_cls, observation_cls, metadata)
+
+    @app.get("/", include_in_schema=False)
+    async def web_root():
+        return RedirectResponse(url="/web/")
+
+    @app.get("/web", include_in_schema=False)
+    async def web_root_no_slash():
+        return RedirectResponse(url="/web/")
+
+    @app.get("/web/metadata")
+    async def web_metadata():
+        return web_manager.metadata.model_dump()
+
+    @app.websocket("/ws/ui")
+    async def websocket_ui_endpoint(websocket: WebSocket):
+        await web_manager.connect_websocket(websocket)
+        try:
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            await web_manager.disconnect_websocket(websocket)
+
+    @app.post("/web/reset")
+    async def web_reset(request: Optional[Dict[str, Any]] = Body(default=None)):
+        return await web_manager.reset_environment(request)
+
+    @app.post("/web/step")
+    async def web_step(request: Dict[str, Any]):
+        if "message" in request:
+            message = request["message"]
+            if hasattr(web_manager.env, "message_to_action"):
+                action = web_manager.env.message_to_action(message)
+                if hasattr(action, "tokens"):
+                    action_data = {"tokens": action.tokens.tolist()}
+                else:
+                    action_data = action.model_dump(exclude={"metadata"})
+            else:
+                action_data = {"message": message}
+        else:
+            action_data = request.get("action", {})
+
+        return await web_manager.step_environment(action_data)
+
+    @app.get("/web/state")
+    async def web_state():
+        try:
+            return web_manager.get_state()
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+
+    gradio_blocks = build_autodsar_ui(
+        web_manager,
+        action_fields={},
+        metadata=metadata,
+        is_chat_env=False,
+        title=metadata.name,
+        quick_start_md=get_quick_start_markdown(metadata, action_cls, observation_cls),
+    )
+    return gr.mount_gradio_app(
+        app,
+        gradio_blocks,
+        path="/web",
+        theme=OPENENV_GRADIO_THEME,
+        css=OPENENV_GRADIO_CSS,
+    )

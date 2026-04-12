@@ -8,6 +8,8 @@ Usage:
     uvicorn server.app:app --host 0.0.0.0 --port 8000
 """
 
+import os
+
 try:
     from openenv.core.env_server.http_server import create_app
 except ImportError:
@@ -15,17 +17,24 @@ except ImportError:
 
 from models import DSARAction, DSARObservation
 from .dsar_environment import DSAREnvironment
-from .ui import build_autodsar_ui
+from .ui import create_autodsar_web_app
 
 # Create the app using OpenEnv's factory helper.
 # Pass the CLASS (not instance) — the framework creates instances per session.
-app = create_app(
-    DSAREnvironment,
-    DSARAction,
-    DSARObservation,
-    env_name="dsar_env",
-    gradio_builder=build_autodsar_ui,
-)
+if os.getenv("ENABLE_WEB_INTERFACE", "false").lower() in ("true", "1", "yes"):
+    app = create_autodsar_web_app(
+        DSAREnvironment,
+        DSARAction,
+        DSARObservation,
+        env_name="dsar_env",
+    )
+else:
+    app = create_app(
+        DSAREnvironment,
+        DSARAction,
+        DSARObservation,
+        env_name="dsar_env",
+    )
 
 
 def main():
