@@ -65,13 +65,38 @@ DIFFICULTIES = ["low", "medium", "high"]
 
 CSS = """
 .gradio-container {
-  color: #18181b;
+  color: #f8fafc !important;
   background:
-    linear-gradient(180deg, rgba(255,255,255,.88), rgba(246,248,247,.96)),
+    linear-gradient(180deg, rgba(3,7,18,.92), rgba(15,23,42,.96)),
     url("https://images.unsplash.com/photo-1451187580459-43490279c0fa?auto=format&fit=crop&w=1800&q=80");
   background-size: cover;
   background-position: center top;
   background-attachment: fixed;
+}
+.gradio-container, .gradio-container * {
+  color-scheme: dark;
+}
+.gradio-container label,
+.gradio-container .prose,
+.gradio-container .markdown,
+.gradio-container p,
+.gradio-container li,
+.gradio-container h1,
+.gradio-container h2,
+.gradio-container h3 {
+  color: #f8fafc !important;
+}
+.gradio-container textarea,
+.gradio-container input,
+.gradio-container select,
+.gradio-container .cm-editor,
+.gradio-container .cm-scroller,
+.gradio-container .cm-content,
+.gradio-container pre,
+.gradio-container code {
+  background: #020617 !important;
+  color: #e2e8f0 !important;
+  border-color: #334155 !important;
 }
 .autodsar-shell {
   max-width: 1180px;
@@ -86,15 +111,15 @@ CSS = """
 }
 .autodsar-brand {
   font-weight: 900;
-  color: #18181b;
+  color: #f8fafc;
 }
 .autodsar-badge {
   display: inline-block;
-  border: 1px solid #99f6e4;
+  border: 1px solid #2dd4bf;
   border-radius: 8px;
   padding: 5px 9px;
-  background: #f0fdfa;
-  color: #0f766e;
+  background: rgba(20,184,166,.14);
+  color: #5eead4;
   font-size: 13px;
   font-weight: 800;
 }
@@ -107,32 +132,34 @@ CSS = """
   padding: 30px 0 34px;
 }
 .autodsar-copy {
-  background: rgba(255,255,255,.92);
-  border: 1px solid rgba(24,24,27,.16);
+  background: rgba(15,23,42,.9);
+  border: 1px solid rgba(148,163,184,.38);
   border-radius: 8px;
   padding: 34px;
+  box-shadow: 0 22px 70px rgba(2,6,23,.48);
 }
 .autodsar-kicker {
-  color: #0f766e;
+  color: #5eead4;
   font-weight: 900;
   letter-spacing: 0;
   text-transform: uppercase;
 }
 .autodsar-copy h1 {
   margin: 10px 0 12px;
-  color: #18181b;
+  color: #f8fafc;
   font-size: 54px;
   line-height: 1.02;
 }
 .autodsar-copy p, .autodsar-copy li {
-  color: #3f3f46;
+  color: #cbd5e1;
   font-size: 17px;
 }
 .autodsar-board {
-  background: rgba(255,255,255,.94);
-  border: 1px solid rgba(24,24,27,.16);
+  background: rgba(2,6,23,.88);
+  border: 1px solid rgba(148,163,184,.38);
   border-radius: 8px;
   padding: 24px;
+  box-shadow: 0 22px 70px rgba(2,6,23,.52);
 }
 .autodsar-ladder {
   display: grid;
@@ -144,8 +171,8 @@ CSS = """
   align-items: center;
   gap: 10px;
   padding: 12px;
-  background: #ffffff;
-  border: 1px solid #e4e4e7;
+  background: rgba(15,23,42,.92);
+  border: 1px solid #334155;
   border-radius: 8px;
 }
 .autodsar-dot {
@@ -164,14 +191,14 @@ CSS = """
 .autodsar-step:nth-child(5) .autodsar-dot { background: #7c3aed; }
 .autodsar-step strong {
   display: block;
-  color: #18181b;
+  color: #f8fafc;
 }
 .autodsar-step span {
-  color: #52525b;
+  color: #94a3b8;
   font-size: 13px;
 }
 .autodsar-risk {
-  color: #e11d48;
+  color: #fb7185;
   font-weight: 800;
   text-align: right;
 }
@@ -182,23 +209,26 @@ CSS = """
   margin: 18px 0;
 }
 .autodsar-metric {
-  border-left: 4px solid #e11d48;
-  background: #ffffff;
+  border-left: 4px solid #fb7185;
+  background: rgba(15,23,42,.9);
+  border-top: 1px solid #334155;
+  border-right: 1px solid #334155;
+  border-bottom: 1px solid #334155;
   border-radius: 8px;
   padding: 14px;
 }
 .autodsar-metric strong {
   display: block;
-  color: #18181b;
+  color: #f8fafc;
   font-size: 20px;
 }
 .autodsar-metric span {
-  color: #52525b;
+  color: #cbd5e1;
   font-size: 13px;
 }
 .autodsar-band {
-  background: rgba(255,255,255,.94);
-  border: 1px solid rgba(24,24,27,.16);
+  background: rgba(15,23,42,.92);
+  border: 1px solid rgba(148,163,184,.38);
   border-radius: 8px;
   padding: 22px;
   margin: 14px 0;
@@ -212,30 +242,35 @@ CSS = """
   grid-template-columns: 172px 1fr 72px;
   gap: 10px;
   align-items: center;
-  color: #3f3f46;
+  color: #cbd5e1;
 }
 .autodsar-fill {
   height: 14px;
   border-radius: 8px;
-  background: linear-gradient(90deg, #0f766e, #e11d48);
+  background: linear-gradient(90deg, #2dd4bf, #60a5fa, #fb7185);
 }
 .autodsar-note {
-  background: #f0fdfa;
-  border: 1px solid #99f6e4;
+  background: rgba(20,184,166,.14);
+  border: 1px solid #2dd4bf;
   border-radius: 8px;
   padding: 12px 14px;
 }
 .autodsar-alert {
-  background: #fff7ed;
-  border: 1px solid #fdba74;
+  background: rgba(251,146,60,.13);
+  border: 1px solid #fb923c;
   border-radius: 8px;
   padding: 12px 14px;
 }
 button.primary {
-  background: #0f766e !important;
+  background: #14b8a6 !important;
+  color: #04111d !important;
+  font-weight: 900 !important;
   border-radius: 8px !important;
 }
 button.secondary {
+  background: #1e293b !important;
+  color: #f8fafc !important;
+  border: 1px solid #475569 !important;
   border-radius: 8px !important;
 }
 textarea, input, select {
