@@ -448,7 +448,6 @@ def _home_html() -> str:
       <section class="autodsar-hero">
         <div class="autodsar-copy">
           <div class="autodsar-kicker">GDPR compliance reasoning RL environment</div>
-          <h1>Agents do not fill a checklist. They navigate a compliance maze.</h1>
           <p>
             AutoDSAR is a state-graph reinforcement learning environment for the DSAR
             lifecycle under GDPR Article 15, Article 9, and UK/EU data protection logic.
