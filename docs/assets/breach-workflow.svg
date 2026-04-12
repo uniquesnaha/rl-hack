@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="310" viewBox="0 0 960 310" role="img" aria-labelledby="title desc">
+  <title id="title">Ordered breach workflow</title>
+  <desc id="desc">The breach task requires detection, regulator notice, requester notice, and safe compile in order.</desc>
+  <rect width="960" height="310" fill="#f8faf9"/>
+  <text x="42" y="54" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="800" fill="#111827">Breach-embedded DSAR workflow</text>
+  <text x="42" y="86" font-family="Inter, Arial, sans-serif" font-size="16" fill="#4b5563">The agent must switch from ordinary DSAR handling into ordered notification discipline.</text>
+  <g font-family="Inter, Arial, sans-serif">
+    <g transform="translate(54 140)">
+      <rect width="178" height="86" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="3"/>
+      <text x="24" y="38" font-size="18" font-weight="800" fill="#2563eb">Detect signal</text>
+      <text x="24" y="64" font-size="13" fill="#475569">flag_breach_signal</text>
+    </g>
+    <g transform="translate(282 140)">
+      <rect width="178" height="86" rx="8" fill="#ffffff" stroke="#0f766e" stroke-width="3"/>
+      <text x="24" y="38" font-size="18" font-weight="800" fill="#0f766e">Notify regulator</text>
+      <text x="24" y="64" font-size="13" fill="#475569">notify_regulator</text>
+    </g>
+    <g transform="translate(510 140)">
+      <rect width="178" height="86" rx="8" fill="#ffffff" stroke="#ca8a04" stroke-width="3"/>
+      <text x="24" y="38" font-size="18" font-weight="800" fill="#ca8a04">Notify requester</text>
+      <text x="24" y="64" font-size="13" fill="#475569">notify_requester</text>
+    </g>
+    <g transform="translate(738 140)">
+      <rect width="178" height="86" rx="8" fill="#ffffff" stroke="#e11d48" stroke-width="3"/>
+      <text x="24" y="38" font-size="18" font-weight="800" fill="#e11d48">Compile safely</text>
+      <text x="24" y="64" font-size="13" fill="#475569">compile_response</text>
+    </g>
+    <g stroke="#64748b" stroke-width="4" fill="none">
+      <path d="M238 183 H272"/>
+      <path d="M466 183 H500"/>
+      <path d="M694 183 H728"/>
+    </g>
+    <g fill="#64748b">
+      <path d="M272 183 l-12 -8 v16 z"/>
+      <path d="M500 183 l-12 -8 v16 z"/>
+      <path d="M728 183 l-12 -8 v16 z"/>
+    </g>
+  </g>
+</svg>

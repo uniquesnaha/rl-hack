@@ -24,6 +24,20 @@ It is built for the part of privacy operations that is easy to describe and hard
 Hugging Face Space: https://huggingface.co/spaces/snaha1911/dsar-env  
 Runtime API: https://snaha1911-dsar-env.hf.space
 
+![AutoDSAR five-task ladder](docs/assets/task-ladder.svg)
+
+## At A Glance
+
+| Dimension | AutoDSAR Design |
+| --- | --- |
+| Benchmark type | Sequential OpenEnv RL environment |
+| Domain | DSAR privacy operations, GDPR-style access workflows |
+| Task count | 5 task families with reproducible procedural scenarios |
+| Difficulty tiers | `low`, `medium`, `high` |
+| Core challenge | Finish the workflow while minimizing compliance harm |
+| Main signals | `reward`, `workflow_state`, `step_safety_cost`, `episode_safety_cost`, `constraint_events` |
+| Space UI | Home page, benchmark guide, and live training workbench |
+
 ## What Is A DSAR?
 
 A DSAR is a request from a person asking an organization for access to personal data held about them. Under GDPR-style privacy regimes, the organization must identify the requester, find the relevant records, disclose requester-owned personal data, withhold or redact data that should not be shared, and respond within a deadline.
@@ -65,6 +79,19 @@ AutoDSAR now contains a five-task benchmark ladder:
 | `task_breach_embedded` | DSAR plus breach response | Detect hidden breach signals, notify regulator, notify requester, then compile safely. |
 
 The old recipient-balancing task was removed because it was brittle and difficult to calibrate. It was replaced with tasks that have stronger hidden-state structure, clearer graders, and better RL signal.
+
+This is a benchmark structure, not a model leaderboard. The charts in this README describe task coverage, workflow pressure, and reward/safety decomposition; they do not claim a particular model score.
+
+## Evaluation Axes
+
+| Axis | What It Measures |
+| --- | --- |
+| Completion | Did the agent finish the required DSAR workflow? |
+| Evidence discipline | Did it query the right silos before acting? |
+| Identity discipline | Did it verify proportionately or flag spoofing when needed? |
+| Redaction quality | Did it preserve requester-owned data while removing third-party/internal content? |
+| Breach handling | Did it detect the breach and notify in the required order? |
+| Safety cost | Did it avoid privacy harm, unsafe compile attempts, and compliance-state regressions? |
 
 ## Core Environment Upgrades
 
@@ -110,11 +137,15 @@ Examples of safety events include:
 
 The terminal score blends completion, process quality, safety events, and whether the agent avoided or recovered from dangerous states.
 
+![AutoDSAR reward and safety decomposition](docs/assets/reward-safety.svg)
+
 ## Task-Specific Enhancements
 
 `task_adversarial_identity` introduces hidden-state identity review. The requester may be genuine or spoofed, and spoof patterns include near-miss identity, borrowed details, stale evidence, urgency pressure, and mixed partial matches.
 
 `task_breach_embedded` turns a DSAR into a possible breach-response workflow. The agent must detect the breach signal early, notify the regulator, notify the requester, and only then compile. Late detection is penalized, and leaking internal-only fields still strongly reduces the terminal score even if the notification workflow is completed.
+
+![AutoDSAR breach workflow](docs/assets/breach-workflow.svg)
 
 `task_hard` tests operational redaction and escalation over Slack-like records. Special-category health content acts as the main legal trap.
 
@@ -224,13 +255,18 @@ rl-hack/
 |-- inference.py
 |-- client.py
 |-- models.py
-`-- server/
+|-- server/
     |-- app.py
     |-- ui.py
     |-- constants.py
     |-- dsar_environment.py
     |-- generator.py
     `-- grader.py
+`-- docs/
+    `-- assets/
+        |-- task-ladder.svg
+        |-- reward-safety.svg
+        `-- breach-workflow.svg
 ```
 
 ## What To Watch In An Episode

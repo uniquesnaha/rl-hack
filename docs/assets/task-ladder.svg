@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="390" viewBox="0 0 960 390" role="img" aria-labelledby="title desc">
+  <title id="title">AutoDSAR benchmark ladder</title>
+  <desc id="desc">Five tasks progress from structured disclosure to breach response.</desc>
+  <rect width="960" height="390" fill="#f8faf9"/>
+  <text x="40" y="54" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="800" fill="#111827">Five-task benchmark ladder</text>
+  <text x="40" y="86" font-family="Inter, Arial, sans-serif" font-size="16" fill="#4b5563">Each task adds hidden state, process constraints, and safety consequences.</text>
+  <g font-family="Inter, Arial, sans-serif">
+    <line x1="92" y1="295" x2="866" y2="295" stroke="#94a3b8" stroke-width="4"/>
+    <g transform="translate(40 130)">
+      <rect width="156" height="138" rx="8" fill="#ffffff" stroke="#0f766e" stroke-width="3"/>
+      <text x="20" y="34" font-size="18" font-weight="800" fill="#0f766e">1. Easy</text>
+      <text x="20" y="64" font-size="14" fill="#111827">Structured</text>
+      <text x="20" y="84" font-size="14" fill="#111827">disclosure</text>
+      <text x="20" y="114" font-size="12" fill="#64748b">query -> classify</text>
+      <circle cx="78" cy="165" r="13" fill="#0f766e"/>
+    </g>
+    <g transform="translate(230 108)">
+      <rect width="156" height="160" rx="8" fill="#ffffff" stroke="#2563eb" stroke-width="3"/>
+      <text x="20" y="34" font-size="18" font-weight="800" fill="#2563eb">2. Medium</text>
+      <text x="20" y="64" font-size="14" fill="#111827">Identity plus</text>
+      <text x="20" y="84" font-size="14" fill="#111827">ticket redaction</text>
+      <text x="20" y="124" font-size="12" fill="#64748b">verify -> redact</text>
+      <circle cx="78" cy="187" r="13" fill="#2563eb"/>
+    </g>
+    <g transform="translate(420 86)">
+      <rect width="156" height="182" rx="8" fill="#ffffff" stroke="#dc2626" stroke-width="3"/>
+      <text x="20" y="34" font-size="18" font-weight="800" fill="#dc2626">3. Identity</text>
+      <text x="20" y="64" font-size="14" fill="#111827">Adversarial</text>
+      <text x="20" y="84" font-size="14" fill="#111827">spoof review</text>
+      <text x="20" y="144" font-size="12" fill="#64748b">verify or flag</text>
+      <circle cx="78" cy="209" r="13" fill="#dc2626"/>
+    </g>
+    <g transform="translate(610 64)">
+      <rect width="156" height="204" rx="8" fill="#ffffff" stroke="#ca8a04" stroke-width="3"/>
+      <text x="20" y="34" font-size="18" font-weight="800" fill="#ca8a04">4. Hard</text>
+      <text x="20" y="64" font-size="14" fill="#111827">Slack triage</text>
+      <text x="20" y="84" font-size="14" fill="#111827">and escalation</text>
+      <text x="20" y="166" font-size="12" fill="#64748b">redact -> escalate</text>
+      <circle cx="78" cy="231" r="13" fill="#ca8a04"/>
+    </g>
+    <g transform="translate(800 42)">
+      <rect width="156" height="226" rx="8" fill="#ffffff" stroke="#7c3aed" stroke-width="3"/>
+      <text x="20" y="34" font-size="18" font-weight="800" fill="#7c3aed">5. Breach</text>
+      <text x="20" y="64" font-size="14" fill="#111827">DSAR plus</text>
+      <text x="20" y="84" font-size="14" fill="#111827">notification flow</text>
+      <text x="20" y="188" font-size="12" fill="#64748b">detect -> notify</text>
+      <circle cx="78" cy="253" r="13" fill="#7c3aed"/>
+    </g>
+  </g>
+</svg>

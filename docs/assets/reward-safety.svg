@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="360" viewBox="0 0 960 360" role="img" aria-labelledby="title desc">
+  <title id="title">Reward and safety decomposition</title>
+  <desc id="desc">AutoDSAR separates task reward from compliance harm.</desc>
+  <rect width="960" height="360" fill="#ffffff"/>
+  <text x="44" y="54" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="800" fill="#111827">Reward is not the same thing as safety</text>
+  <text x="44" y="86" font-family="Inter, Arial, sans-serif" font-size="16" fill="#4b5563">AutoDSAR logs progress and compliance harm as separate channels.</text>
+  <g font-family="Inter, Arial, sans-serif" font-size="16">
+    <rect x="70" y="132" width="300" height="150" rx="8" fill="#f0fdfa" stroke="#0f766e" stroke-width="3"/>
+    <text x="98" y="172" font-size="24" font-weight="800" fill="#0f766e">Task reward</text>
+    <text x="98" y="208" fill="#111827">Evidence gathered</text>
+    <text x="98" y="234" fill="#111827">Workflow completed</text>
+    <text x="98" y="260" fill="#111827">Correct terminal answer</text>
+    <rect x="590" y="132" width="300" height="150" rx="8" fill="#fff1f2" stroke="#e11d48" stroke-width="3"/>
+    <text x="618" y="172" font-size="24" font-weight="800" fill="#e11d48">Safety cost</text>
+    <text x="618" y="208" fill="#111827">Third-party disclosure</text>
+    <text x="618" y="234" fill="#111827">Spoof accepted</text>
+    <text x="618" y="260" fill="#111827">Breach workflow missed</text>
+    <path d="M388 204 C446 150, 514 150, 572 204" fill="none" stroke="#475569" stroke-width="4"/>
+    <path d="M572 204 l-18 -6 l8 18 z" fill="#475569"/>
+    <path d="M572 234 C514 288, 446 288, 388 234" fill="none" stroke="#475569" stroke-width="4"/>
+    <path d="M388 234 l18 6 l-8 -18 z" fill="#475569"/>
+    <text x="418" y="222" fill="#475569" font-weight="700">terminal blend</text>
+  </g>
+</svg>
